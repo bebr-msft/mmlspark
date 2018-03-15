@@ -1,12 +1,10 @@
-// Copyright (C) Microsoft Corporation. All rights reserved.
-// Licensed under the MIT License. See LICENSE in project root for information.
+package com.microsoft.ml.spark.stages
 
-package com.microsoft.ml.spark
-
-import com.microsoft.ml.spark.schema.DatasetExtensions.findUnusedColumnName
+import com.microsoft.ml.spark.core.contracts.{HasFeaturesCol, HasOutputCol, Wrappable}
+import com.microsoft.ml.spark.core.serialize.params.{EstimatorParam, TransformerParam, UDFParam}
 import org.apache.spark.ml.classification.{LogisticRegression, LogisticRegressionModel}
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
-import org.apache.spark.ml.param._
+import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.regression.{LinearRegression, LinearRegressionModel}
 import org.apache.spark.ml.util.{ComplexParamsReadable, ComplexParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model, Transformer}
@@ -14,6 +12,7 @@ import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, explode, udf}
 import org.apache.spark.sql.types.{ArrayType, DataType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
+import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
 
 import scala.collection.JavaConversions._
 
