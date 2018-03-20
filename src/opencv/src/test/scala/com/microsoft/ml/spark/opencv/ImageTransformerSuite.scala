@@ -9,7 +9,7 @@ import javax.swing._
 
 import com.microsoft.ml.spark.Readers.implicits._
 import com.microsoft.ml.spark.core.test.base.LinuxOnly
-import com.microsoft.ml.spark.core.test.fuzzing.{TestObject, TransformerFuzzing}
+import com.microsoft.ml.spark.core.test.fuzzing.{FuzzingMethods, TestObject, TransformerFuzzing}
 import org.apache.commons.io.FileUtils
 import org.apache.spark.ml.linalg.DenseVector
 import org.apache.spark.sql.{DataFrame, Row, SaveMode}
@@ -84,11 +84,26 @@ trait ImageTestUtils {
 }
 
 class UnrollImageSuite extends LinuxOnly
-  with TransformerFuzzing[UnrollImage] with ImageTestUtils {
+  with TransformerFuzzing[UnrollImage] with ImageTestUtils with FuzzingMethods {
 
   lazy val filesRoot = s"${sys.env("DATASETS_HOME")}/"
   lazy val imagePath = s"$filesRoot/Images/CIFAR"
   lazy val images: DataFrame = session.readImages(imagePath, recursive = true)
+
+  test("roll and unroll") {
+    val imageCollection = images.select("image").collect().map(_.getAs[Row](0))
+    imageCollection.foreach(row =>
+      assert(row ===
+        UnrollImage.roll(
+          UnrollImage.unroll(row).toArray.map(_.toInt),
+          row.getString(0),
+          row.getInt(1),
+          row.getInt(2),
+          row.getInt(3)
+        )
+      )
+    )
+  }
 
   test("unroll") {
     assert(images.count() == 6)

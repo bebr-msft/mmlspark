@@ -1,16 +1,27 @@
 // Copyright (C) Microsoft Corporation. All rights reserved.
 // Licensed under the MIT License. See LICENSE in project root for information.
 
-package com.microsoft.ml.spark.stages
+package com.microsoft.ml.spark.cntk
 
+import java.net.URI
+
+import com.microsoft.ml.spark.core.env.FileUtilities.File
 import com.microsoft.ml.spark.core.test.fuzzing.{FuzzingMethods, TestObject, TransformerFuzzing}
+import com.microsoft.ml.spark.downloader.{ModelDownloader, ModelSchema}
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
 import org.apache.spark.ml.linalg.{DenseMatrix, DenseVector, Vector, Vectors}
 import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.ml.util.MLReadable
 import org.apache.spark.sql.DataFrame
+import com.microsoft.ml.spark.Readers.implicits._
+import com.microsoft.ml.spark.stages.basic.UDFTransformer
+import org.apache.spark.ml.NamespaceInjections
+import com.microsoft.ml.spark.udfs.udfs.get_value_at
+import org.apache.spark.sql.functions.udf
+import org.apache.spark.sql.types.DoubleType
 
-class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods {
+
+class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageFeaturizerUtils {
 
   lazy val x = (0 to 10).map(_.toDouble)
   lazy val y = x.map(_ * 7)
@@ -22,8 +33,8 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods {
   lazy val fitlr = lr.fit(df)
 
   lazy val t = new LIME()
-    .setLocalModel(new LinearRegression())
     .setModel(fitlr)
+    .setLabelCol(fitlr.getPredictionCol)
     .setSampler[Vector](
     { arr: Vector =>
       (1 to 10).map { i =>
@@ -56,8 +67,8 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods {
     lazy val fitlr = lr.fit(df)
 
     lazy val t = new LIME()
-      .setLocalModel(new LinearRegression())
       .setModel(fitlr)
+      .setLabelCol(fitlr.getPredictionCol)
       .setFeaturesCol("_1")
       .setOutputCol("weights")
 
@@ -65,6 +76,27 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods {
       .collect()
       .map(_.getAs[DenseVector](0))
       .foreach(s => assert(s === new DenseVector(randomMatrix.toArray)))
+  }
+
+  test("image featurizer lime") {
+    val resnet = resNetModel().setCutOutputLayers(0)
+    val outputCol = "output"
+    val model = NamespaceInjections.pipelineModel(Array(
+      resnet,
+      new UDFTransformer()
+        .setInputCol(resnet.getOutputCol)
+        .setOutputCol(outputCol)
+        .setUDF(udf({vec: org.apache.spark.ml.linalg.Vector => vec(0)}, DoubleType))
+    ))
+
+    lazy val t = new LIME()
+      .setModel(model)
+      .setLabelCol(outputCol)
+      .setFeaturesCol(inputCol)
+      .setOutputCol("weights")
+      .setNSamples(10)
+
+    t.transform(images.limit(2)).show()
   }
 
   override def testObjects(): Seq[TestObject[LIME]] = Seq(new TestObject(t, df))

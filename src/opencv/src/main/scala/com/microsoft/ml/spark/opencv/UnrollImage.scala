@@ -16,22 +16,22 @@ import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
 object UnrollImage extends DefaultParamsReadable[UnrollImage]{
 
-  private def unroll(row: Row): DenseVector = {
+  private[ml] def unroll(row: Row): DenseVector = {
     val width = getWidth(row)
     val height = getHeight(row)
     val bytes = getBytes(row)
 
     val area = width*height
     require(area >= 0 && area < 1e8, "image has incorrect dimensions" )
-    require(bytes.length == width*height*3, "image has incorrect nuber of bytes" )
+    require(bytes.length == width*height*3, "image has incorrect number of bytes" )
 
-    var rearranged =  Array.fill[Double](area*3)(0.0)
+    val rearranged =  Array.fill[Double](area*3)(0.0)
     var count = 0
     for (c <- 0 until 3) {
       for (h <- 0 until height) {
-        val offset = h * width * 3
         for (w <- 0 until width) {
-          val b = bytes(offset + w*3 + c).toDouble
+          val index = h * width * 3 + w*3 + c
+          val b = bytes(index).toDouble
 
           //TODO: is there a better way to convert to unsigned byte?
           rearranged(count) =  if (b>0) b else b + 256.0
@@ -41,6 +41,28 @@ object UnrollImage extends DefaultParamsReadable[UnrollImage]{
     }
     new DenseVector(rearranged)
   }
+
+  private[ml] def roll(values: Array[Int], path: String, height: Int, width: Int, typeVal: Int): Row = {
+    val area = width*height
+    require(area >= 0 && area < 1e8, "image has incorrect dimensions" )
+    require(values.length == width*height*3, "image has incorrect number of bytes" )
+
+    val rearranged =  Array.fill[Int](area*3)(0)
+    var count = 0
+    for (c <- 0 until 3) {
+      for (h <- 0 until height) {
+        for (w <- 0 until width) {
+          val index = h * width * 3 + w*3 + c
+          val b = values(count)
+          rearranged(index) = if (b < 128) b else b - 256
+          count += 1
+        }
+      }
+    }
+
+    Row(path, height, width, typeVal, rearranged.map(_.toByte))
+  }
+
 }
 
 /** Converts the representation of an m X n pixel image to an m * n vector of Doubles

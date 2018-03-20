@@ -17,9 +17,7 @@ import org.apache.spark.ml.linalg.DenseVector
 import org.apache.spark.ml.util.MLReadable
 import org.apache.spark.sql.DataFrame
 
-class ImageFeaturizerSuite extends CNTKTestUtils with FileReaderUtils
-  with TransformerFuzzing[ImageFeaturizer]{
-
+trait ImageFeaturizerUtils extends CNTKTestUtils {
   val images: DataFrame = session.readImages(imagePath, true).withColumnRenamed("image", inputCol)
 
   val modelDir = new File(filesRoot, "CNTKModel")
@@ -27,6 +25,15 @@ class ImageFeaturizerSuite extends CNTKTestUtils with FileReaderUtils
 
   lazy val resNetUri: URI = new File(modelDir, "ResNet50_ImageNet.model").toURI
   lazy val resNet: ModelSchema = modelDownloader.downloadByName("ResNet50")
+
+  def resNetModel(): ImageFeaturizer = new ImageFeaturizer()
+    .setInputCol(inputCol)
+    .setOutputCol(outputCol)
+    .setModel(session, resNet)
+}
+
+class ImageFeaturizerSuite extends ImageFeaturizerUtils with FileReaderUtils
+  with TransformerFuzzing[ImageFeaturizer]{
 
   test("Image featurizer should reproduce the CIFAR10 experiment") {
     val model = new ImageFeaturizer()
@@ -65,11 +72,6 @@ class ImageFeaturizerSuite extends CNTKTestUtils with FileReaderUtils
       assert(session.sql("select * from images").count() == 6)
     }
   }
-
-  def resNetModel(): ImageFeaturizer = new ImageFeaturizer()
-    .setInputCol(inputCol)
-    .setOutputCol(outputCol)
-    .setModel(session, resNet)
 
   test("the Image feature should work with the modelSchema") {
     val result = resNetModel().setCutOutputLayers(0).transform(images)
