@@ -1,22 +1,68 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License. See LICENSE in project root for information.
+
 package com.microsoft.ml.spark.stages
 
 import com.microsoft.ml.spark.core.contracts.{HasFeaturesCol, HasOutputCol, Wrappable}
 import com.microsoft.ml.spark.core.serialize.params.{EstimatorParam, TransformerParam, UDFParam}
 import org.apache.spark.ml.classification.{LogisticRegression, LogisticRegressionModel}
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
-import org.apache.spark.ml.param.ParamMap
+import org.apache.spark.ml.param.{IntParam, ParamMap}
 import org.apache.spark.ml.regression.{LinearRegression, LinearRegressionModel}
 import org.apache.spark.ml.util.{ComplexParamsReadable, ComplexParamsWritable, Identifiable}
 import org.apache.spark.ml.{Estimator, Model, Transformer}
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, explode, udf}
-import org.apache.spark.sql.types.{ArrayType, DataType, StructType}
+import org.apache.spark.sql.types.{ArrayType, DataType, DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
+import org.apache.spark.ml.linalg.{DenseVector, Vector => SparkVector}
 
 import scala.collection.JavaConversions._
+import scala.reflect.ClassTag
 
-object LIME extends ComplexParamsReadable[LIME]
+object LIME extends ComplexParamsReadable[LIME] {
+
+  def doubleSampler(scale: Double): Double => Iterator[Double] = { x: Double =>
+    new Iterator[Double] {
+      override def hasNext: Boolean = true
+
+      override def next(): Double = {
+        x + scala.util.Random.nextGaussian() * scale
+      }
+    }
+  }
+
+  def arraySampler[T: ClassTag](elementSampler: T => Iterator[T]): Array[T] => Iterator[Array[T]] = { xs =>
+    val samplers = xs.map(x => elementSampler(x))
+    new Iterator[Array[T]] {
+      override def hasNext: Boolean = true
+
+      override def next(): Array[T] = {
+        samplers.map(s => s.next())
+      }
+    }
+  }
+
+  def vectorSampler(scale: Double): SparkVector => Iterator[SparkVector] = {v =>
+    val sampler = arraySampler[Double](doubleSampler(scale))
+    sampler(v.toArray).map(new DenseVector(_))
+  }
+
+  private def defaultSampler(dt: DataType): Any => Iterator[Any] = dt match {
+      case ArrayType(elementType, _) => arraySampler(defaultSampler(elementType)).asInstanceOf[Any => Iterator[Any]]
+      case DoubleType => doubleSampler(1.0).asInstanceOf[Any => Iterator[Any]]
+      case VectorType => vectorSampler(1.0).asInstanceOf[Any => Iterator[Any]]
+  }
+
+  def defaultFiniteSampler(dt: DataType, n: Int): UserDefinedFunction =
+    udf(finiteSampler(defaultSampler(dt), n), ArrayType(dt))
+
+  private def finiteSampler[T: ClassTag](sampler: T => Iterator[T], n: Int): T => Array[T] = {t =>
+    sampler(t).take(n).toArray
+  }
+
+}
 
 /** Distributed implementation of
   * Local Interpretable Model-Agnostic Explanations (LIME)
@@ -53,7 +99,18 @@ class LIME(val uid: String) extends Transformer
     setSampler(udf(f, ArrayType(elementType)))
   }
 
+  val nSamples = new IntParam(this, "nSamples", "The number of samples to generate if using a default sampler")
+
+  def getNSamples: Int = $(nSamples)
+
+  def setNSamples(v: Int): this.type = set(nSamples, v)
+
+  setDefault(nSamples -> 100)
+
   override def transform(dataset: Dataset[_]): DataFrame = {
+    if (get(sampler).isEmpty){
+      setSampler(LIME.defaultFiniteSampler(dataset.schema(getFeaturesCol).dataType, getNSamples))
+    }
     val df = dataset.toDF
     val sampleFeaturesCol = findUnusedColumnName("sampleFeatures", df)
     val samplePredictionCol = findUnusedColumnName("samplePrediction", df)
@@ -85,7 +142,7 @@ class LIME(val uid: String) extends Transformer
       Row.merge(row, Row(coeffs))
     }
 
-    df.sparkSession.createDataFrame(sampledIterator.toSeq,df.schema
+    df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
       .add(getOutputCol, VectorType))
   }
 
