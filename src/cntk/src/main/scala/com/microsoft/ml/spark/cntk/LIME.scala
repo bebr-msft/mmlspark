@@ -75,6 +75,11 @@ object LIME extends ComplexParamsReadable[LIME] {
     sampler(t).take(n).toArray
   }
 
+  def importanceMasking(threshold: Double = 0.0): UserDefinedFunction =
+    udf({ case (baseImage: Row, mask: DenseVector) =>
+        UnrollImage.unroll(baseImage).toArray.zip(mask.toArray).map(pixel)
+    },ImageSchema.columnSchema)
+
 }
 
 /** Distributed implementation of
