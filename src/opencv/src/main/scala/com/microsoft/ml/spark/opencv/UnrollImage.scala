@@ -6,13 +6,15 @@ package com.microsoft.ml.spark.opencv
 import com.microsoft.ml.spark.core.contracts.{HasInputCol, HasOutputCol, MMLParams}
 import com.microsoft.ml.spark.core.schema.ImageSchema._
 import org.apache.spark.ml.Transformer
-import org.apache.spark.ml.linalg.DenseVector
+import org.apache.spark.ml.linalg.{DenseVector, Vector}
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
 import org.apache.spark.ml.param.ParamMap
 import org.apache.spark.ml.util.{DefaultParamsReadable, Identifiable}
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
+
+import scala.math.round
 
 object UnrollImage extends DefaultParamsReadable[UnrollImage]{
 
@@ -40,6 +42,15 @@ object UnrollImage extends DefaultParamsReadable[UnrollImage]{
       }
     }
     new DenseVector(rearranged)
+  }
+
+  private[ml] def roll(values: Vector, originalImage: Row): Row = {
+    roll(
+      values.toArray.map(d => math.max(0, math.min(255, round(d))).toInt),
+      originalImage.getString(0),
+      originalImage.getInt(1),
+      originalImage.getInt(2),
+      originalImage.getInt(3))
   }
 
   private[ml] def roll(values: Array[Int], path: String, height: Int, width: Int, typeVal: Int): Row = {

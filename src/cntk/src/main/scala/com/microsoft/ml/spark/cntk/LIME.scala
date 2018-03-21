@@ -48,15 +48,14 @@ object LIME extends ComplexParamsReadable[LIME] {
     }
   }
 
-  def vectorSampler(scale: Double): SparkVector => Iterator[SparkVector] = {v =>
+  def vectorSampler(scale: Double): SparkVector => Iterator[SparkVector] = { v =>
     val sampler = arraySampler[Double](doubleSampler(scale))
     sampler(v.toArray).map(new DenseVector(_))
   }
 
-  def imageSampler(scale: Double): Row => Iterator[Row] = {row =>
-    vectorSampler(scale)(UnrollImage.unroll(row)).map {dv =>
-      val intArray = dv.toArray.map(d => math.max(0, math.min(255, round(d))).toInt)
-      UnrollImage.roll(intArray, row.getString(0),row.getInt(1), row.getInt(2), row.getInt(3))
+  def imageSampler(scale: Double): Row => Iterator[Row] = { row =>
+    vectorSampler(scale)(UnrollImage.unroll(row)).map { dv =>
+      UnrollImage.roll(dv, row)
     }
   }
 
@@ -71,14 +70,21 @@ object LIME extends ComplexParamsReadable[LIME] {
   def defaultFiniteSampler(dt: DataType, n: Int): UserDefinedFunction =
     udf(finiteSampler(defaultSampler(dt), n), ArrayType(dt))
 
-  private def finiteSampler[T: ClassTag](sampler: T => Iterator[T], n: Int): T => Array[T] = {t =>
+  private def finiteSampler[T: ClassTag](sampler: T => Iterator[T], n: Int): T => Array[T] = { t =>
     sampler(t).take(n).toArray
   }
 
-  def importanceMasking(threshold: Double = 0.0): UserDefinedFunction =
+  def importanceMasking(threshold: Double = 0.0, greyscaleMask: Boolean = true): UserDefinedFunction =
     udf({ case (baseImage: Row, mask: DenseVector) =>
-        UnrollImage.unroll(baseImage).toArray.zip(mask.toArray).map(pixel)
-    },ImageSchema.columnSchema)
+      val dv = if (!greyscaleMask) {
+        new DenseVector(UnrollImage.unroll(baseImage).toArray
+          .zip(mask.toArray)
+          .map { case (e, m) => if (m > threshold) e else 0.0 })
+      } else {
+        throw new NotImplementedError("need to fill this in")
+      }
+      UnrollImage.roll(dv, baseImage)
+    }, ImageSchema.columnSchema)
 
 }
 
@@ -117,7 +123,7 @@ class LIME(val uid: String) extends Transformer
   setDefault(nSamples -> 100)
 
   override def transform(dataset: Dataset[_]): DataFrame = {
-    if (get(sampler).isEmpty){
+    if (get(sampler).isEmpty) {
       setSampler(LIME.defaultFiniteSampler(dataset.schema(getFeaturesCol).dataType, getNSamples))
     }
     val df = dataset.toDF
@@ -149,7 +155,7 @@ class LIME(val uid: String) extends Transformer
       val mappedLocalDF = model.transform(localDF)
       val coeffs = localModel.fit(mappedLocalDF) match {
         case lr: LinearRegressionModel => lr.coefficients
-        case pipe: PipelineModel => pipe.stages(pipe.stages.length -2) match {
+        case pipe: PipelineModel => pipe.stages(pipe.stages.length - 2) match {
           case lr: LinearRegressionModel => lr.coefficients
         }
       }
