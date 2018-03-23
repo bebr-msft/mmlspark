@@ -1,31 +1,30 @@
 package com.microsoft.ml.spark.cntk;
 
-import java.awt.Color;
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.util.Arrays;
 import java.util.Vector;
 import javax.imageio.ImageIO;
 
-public class Superpixel {
+class SuperpixelJava {
 
     // arrays to store values during process
-    double[] distances;
-    int[] labels;
-    int[] reds;
-    int[] greens;
-    int[] blues;
+    private double[] distances;
+    private int[] labels;
+    private int[] reds;
+    private int[] greens;
+    private int[] blues;
 
-    Cluster[] clusters;
+    private Cluster[] clusters;
 
     // in case of instable clusters, max number of loops
-    int maxClusteringLoops = 50;
+    private int maxClusteringLoops = 50;
     /**
      * @param args
      */
     public static void main(String[] args) {
         if (args.length!=4) {
-            System.out.println("Usage: java popscan.Superpixel"
+            System.out.println("Usage: java popscan.SuperpixelJava"
                     + " [source image filename]"
                     + " [destination image filename]"
                     + " [cell width S (1-255)]"
@@ -38,13 +37,13 @@ public class Superpixel {
         double S = Integer.parseInt(args[2]);
         double m = Double.parseDouble(args[3]);
         BufferedImage img = loadImage(src);
-        Superpixel sp = new Superpixel();
+        SuperpixelJava sp = new SuperpixelJava();
         BufferedImage dstImage = sp.calculate(img,S,m);
         // save the resulting image
         saveImage(dst, dstImage);
     }
 
-    public Superpixel() {    }
+    public SuperpixelJava() {}
 
     public BufferedImage calculate(BufferedImage image,
                                    double S, double m) {
