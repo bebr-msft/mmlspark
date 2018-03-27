@@ -23,7 +23,7 @@ class SuperpixelSuite extends CNTKTestUtils {
   img.setRGB(0,0,width,height,rgbArray,0,width)
 
   lazy val allClusters = sp.cluster(img, 16, 130)
-  lazy val randomClusters = Superpixel.randomClusters(img, allClusters.get, 0.25)
+  lazy val randomClusters = Superpixel.censorImage(img, allClusters.get, 0.25)
 
   test("Censored clusters' pixels should be black in the censored image") {
     val outputImg = randomClusters._1

@@ -55,7 +55,7 @@ object Superpixel {
     b
   }
 
-  def randomClusters(img: BufferedImage, allClusters: Array[Cluster], decInclude: Double = 1.0): (BufferedImage, Array[Cluster], Array[Boolean]) = {
+  def censorImage(img: BufferedImage, allClusters: Array[Cluster], decInclude: Double = 1.0): (BufferedImage, Array[Cluster], Array[Boolean]) = {
     val clusterStates = allClusters.map(c => Random.nextDouble <= decInclude)
 //    val includedClusters = clusterStates.zipWithIndex.flatMap { case (cs, i) => if (cs) Some(allClusters(i)) else None }
     val censoredImage = createImage(img, allClusters, clusterStates)
@@ -87,23 +87,9 @@ object Superpixel {
       override def hasNext: Boolean = true
 
       override def next(): (BufferedImage, Array[Cluster], Array[Boolean]) = {
-        randomClusters(x, allClusters.get, decInclude)
+        censorImage(x, allClusters.get, decInclude)
       }
     }
-  }
-
-  // Self-contained testing via main method
-  def main(args: Array[String]): Unit = {
-
-    val img = Superpixel.loadImage("/home/bebr/Downloads/Turtle.jpg").get
-    val iterator = Superpixel.censoredImageSampler(.25, 16, 130)(img)
-
-    for (i <- 0 until 5) {
-      val censoredImg = iterator.next()
-      Superpixel.displayImage(censoredImg._1)
-    }
-
-    ()
   }
 }
 
