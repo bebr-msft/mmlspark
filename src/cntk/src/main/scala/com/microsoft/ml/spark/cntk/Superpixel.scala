@@ -1,9 +1,13 @@
 package com.microsoft.ml.spark.cntk
 
+import java.awt.FlowLayout
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util
 import javax.imageio.ImageIO
+import javax.swing.{ImageIcon, JFrame, JLabel}
+import scala.collection.mutable.ArrayBuffer
+import scala.util.Random
 
 /**
   *   Based on "Superpixel algorithm implemented in Java" at
@@ -12,10 +16,21 @@ import javax.imageio.ImageIO
 
 object Superpixel {
 
+  def displayImage(img: BufferedImage): Unit = {
+    val frame: JFrame = new JFrame()
+    frame.getContentPane().setLayout(new FlowLayout())
+    frame.getContentPane().add(new JLabel(new ImageIcon(img)))
+    frame.pack()
+    frame.setVisible(true)
+  }
+
   def saveImage(filename: String, image: BufferedImage): Unit = {
     val file = new File(filename)
-    try
+    try {
       ImageIO.write(image, "png", file)
+      ()
+    }
+
     catch {
       case e: Exception =>
         System.out.println(e.toString + " Image '" + filename + "' saving failed.")
@@ -31,6 +46,65 @@ object Superpixel {
         None
     }
   }
+
+  def copyImage(source: BufferedImage): BufferedImage = {
+    val b = new BufferedImage(source.getWidth, source.getHeight, source.getType)
+    val g = b.getGraphics
+    g.drawImage(source, 0, 0, null)
+    g.dispose()
+    b
+  }
+
+  def randomClusters(img: BufferedImage, allClusters: Array[Cluster], decInclude: Double = 1.0): (BufferedImage, Array[Cluster], Array[Boolean]) = {
+    val clusterStates = allClusters.map(c => Random.nextDouble <= decInclude)
+//    val includedClusters = clusterStates.zipWithIndex.flatMap { case (cs, i) => if (cs) Some(allClusters(i)) else None }
+    val censoredImage = createImage(img, allClusters, clusterStates)
+    (censoredImage, allClusters, clusterStates)
+  }
+
+  def createImage(img: BufferedImage, allClusters: Array[Cluster], clusterStates: Array[Boolean]): BufferedImage = {
+    val output = copyImage(img)
+
+    allClusters.zipWithIndex.foreach { case (c,i) => {
+      if (!clusterStates(i)) {
+        c.pixels.foreach(pt => {
+          output.setRGB(pt._1, pt._2, 0x000000)
+        })
+      }
+      else {
+        c.pixels.foreach(pt => {
+          output.setRGB(pt._1, pt._2, img.getRGB(pt._1, pt._2))
+        })
+      }
+    }}
+    output
+  }
+
+  def censoredImageSampler(decInclude: Double = 1.0, cellSize: Double, modifier: Double): BufferedImage => Iterator[(BufferedImage, Array[Cluster], Array[Boolean])] = { x: BufferedImage =>
+    val p: Superpixel = new Superpixel()
+    val allClusters = p.cluster(x, cellSize, modifier)
+    new Iterator[(BufferedImage, Array[Cluster], Array[Boolean])] {
+      override def hasNext: Boolean = true
+
+      override def next(): (BufferedImage, Array[Cluster], Array[Boolean]) = {
+        randomClusters(x, allClusters.get, decInclude)
+      }
+    }
+  }
+
+  // Self-contained testing via main method
+  def main(args: Array[String]): Unit = {
+
+    val img = Superpixel.loadImage("/home/bebr/Downloads/Turtle.jpg").get
+    val iterator = Superpixel.censoredImageSampler(.25, 16, 130)(img)
+
+    for (i <- 0 until 5) {
+      val censoredImg = iterator.next()
+      Superpixel.displayImage(censoredImg._1)
+    }
+
+    ()
+  }
 }
 
 class Superpixel() {
@@ -41,10 +115,10 @@ class Superpixel() {
   var greens: Option[Array[Int]] = None: Option[Array[Int]]
   var blues: Option[Array[Int]] = None: Option[Array[Int]]
   var clusters: Option[Array[Cluster]] = None: Option[Array[Cluster]]
-  // in case of instable clusters, max number of loops
+  // in case of unstable clusters, max number of loops
   val maxClusteringLoops = 50
 
-  def calculate(image: BufferedImage, S: Double, m: Double): BufferedImage = {
+  def cluster(image: BufferedImage, cellSize: Double, modifier: Double): Option[Array[Cluster]] = {
     val width = image.getWidth
     val height = image.getHeight
     val result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
@@ -66,9 +140,9 @@ class Superpixel() {
       while (x < width) {
         val pos = x + y * width
         val color = pixels(pos)
-        reds(pos) = color >> 16 & 0x000000FF
-        greens(pos) = color >> 8 & 0x000000FF
-        blues(pos) = color >> 0 & 0x000000FF
+        reds.get(pos) = color >> 16 & 0x000000FF
+        greens.get(pos) = color >> 8 & 0x000000FF
+        blues.get(pos) = color >> 0 & 0x000000FF
 
         {
           x += 1; x - 1
@@ -80,7 +154,7 @@ class Superpixel() {
       }
     }
     // create clusters
-    createClusters(image, S, m)
+    createClusters(image, cellSize, modifier)
     // loop until all clusters are stable!
     var loops = 0
     var pixelChangedCluster = true
@@ -93,10 +167,10 @@ class Superpixel() {
         val c = clusters.get(i)
         // for each pixel i in 2S region around
         // cluster center
-        val xs = Math.max((c.avg_x - S).toInt, 0)
-        val ys = Math.max((c.avg_y - S).toInt, 0)
-        val xe = Math.min((c.avg_x + S).toInt, width)
-        val ye = Math.min((c.avg_y + S).toInt, height)
+        val xs = Math.max((c.avg_x - cellSize).toInt, 0)
+        val ys = Math.max((c.avg_y - cellSize).toInt, 0)
+        val xe = Math.min((c.avg_x + cellSize).toInt, width)
+        val ye = Math.min((c.avg_y + cellSize).toInt, height)
         y = ys
         while ( {
           y < ye
@@ -106,7 +180,7 @@ class Superpixel() {
             x < xe
           }) {
             val pos = x + width * y
-            val D = c.distance(x, y, reds.get(pos), greens.get(pos), blues.get(pos), S, m, width, height)
+            val D = c.distance(x, y, reds.get(pos), greens.get(pos), blues.get(pos), cellSize, modifier, width, height)
             if ((D < distances.get(pos)) && (labels.get(pos) != c.id)) {
               distances.get(pos) = D
               labels.get(pos) = c.id
@@ -188,14 +262,12 @@ class Superpixel() {
 
     val end = System.currentTimeMillis
     System.out.println("Clustered to " + clusters.get.length + " superpixels in " + loops + " loops in " + (end - start) + " ms.")
-    result
+
+    clusters
   }
 
-  /*
-   * Create initial clusters.
-   */
   def createClusters(image: BufferedImage, cellSize: Double, modifier: Double): Unit = {
-    val temp = new util.Vector[SuperpixelJava#Cluster]
+    val temp = new util.Vector[Cluster]
     val width = image.getWidth
     val height = image.getHeight
     var even = false
@@ -215,7 +287,7 @@ class Superpixel() {
       var x = xstart
       while (x < width) {
         val pos = (x + y * width).toInt
-        val c = new SuperpixelJava#Cluster(id, reds.get(pos), greens.get(pos), blues.get(pos), x.toInt, y.toInt, cellSize, modifier)
+        val c = new Cluster(id, reds.get(pos), greens.get(pos), blues.get(pos), x.toInt, y.toInt, cellSize, modifier)
         temp.add(c)
         id += 1
 
@@ -227,77 +299,77 @@ class Superpixel() {
     clusters = Some(new Array[Cluster](temp.size))
     var i = 0
     while (i < temp.size) {
-      clusters(i) = temp.elementAt(i)
+      clusters.get(i) = temp.elementAt(i)
 
       {
         i += 1; i - 1
       }
     }
   }
+}
 
-  class Cluster(var id: Int, val in_red: Int, val in_green: Int, val in_blue: Int, val x: Int, val y: Int, val cellSize: Double, val modifier: Double) {
-    var inv: Double = 1.0 / ((cellSize / modifier) * (cellSize / modifier)) // inv variable for optimization
-    var pixelCount = .0 // pixels in this cluster
-    var avg_red = .0 // average red value
-    var avg_green = .0 // average green value
-    var avg_blue = .0 // average blue value
-    var sum_red = .0 // sum red values
-    var sum_green = .0 // sum green values
-    var sum_blue = .0 // sum blue values
-    var sum_x = .0 // sum x
-    var sum_y = .0 // sum y
-    var avg_x = .0 // average x
-    var avg_y = .0 // average y
+class Cluster(var id: Int, val in_red: Int, val in_green: Int, val in_blue: Int, val x: Int, val y: Int, val cellSize: Double, val modifier: Double) {
+  var inv: Double = 1.0 / ((cellSize / modifier) * (cellSize / modifier)) // inv variable for optimization
+  var pixelCount = .0 // pixels in this cluster
+  var avg_red = .0 // average red value
+  var avg_green = .0 // average green value
+  var avg_blue = .0 // average blue value
+  var sum_red = .0 // sum red values
+  var sum_green = .0 // sum green values
+  var sum_blue = .0 // sum blue values
+  var sum_x = .0 // sum x
+  var sum_y = .0 // sum y
+  var avg_x = .0 // average x
+  var avg_y = .0 // average y
+  var pixels = new ArrayBuffer[(Int, Int)]
 
-    addPixel(x, y, in_red, in_green, in_blue)
-    // calculate center with initial one pixel
-    calculateCenter()
+  addPixel(x, y, in_red, in_green, in_blue)
+  // calculate center with initial one pixel
+  calculateCenter()
 
-    def reset(): Unit = {
-      avg_red = 0
-      avg_green = 0
-      avg_blue = 0
-      sum_red = 0
-      sum_green = 0
-      sum_blue = 0
-      pixelCount = 0
-      avg_x = 0
-      avg_y = 0
-      sum_x = 0
-      sum_y = 0
-    }
+  def reset(): Unit = {
+    avg_red = 0
+    avg_green = 0
+    avg_blue = 0
+    sum_red = 0
+    sum_green = 0
+    sum_blue = 0
+    pixelCount = 0
+    avg_x = 0
+    avg_y = 0
+    sum_x = 0
+    sum_y = 0
+    pixels.clear()
+  }
 
-    /*
-     * Add pixel color values to sum of previously added
-     * color values.
-     */
-    def addPixel(x: Int, y: Int, in_red: Int, in_green: Int, in_blue: Int): Unit = {
-      sum_x += x
-      sum_y += y
-      sum_red += in_red
-      sum_green += in_green
-      sum_blue += in_blue
-      pixelCount += 1
-    }
+  def addPixel(x: Int, y: Int, in_red: Int, in_green: Int, in_blue: Int): Unit = {
+    sum_x += x
+    sum_y += y
+    sum_red += in_red
+    sum_green += in_green
+    sum_blue += in_blue
+    pixelCount += 1
+    pixels += ((x,y))
+    ()
+  }
 
-    def calculateCenter(): Unit = {
-      // Optimization: using "inverse"
-      // to change divide to multiply
-      val inv = 1 / pixelCount
-      avg_red = sum_red * inv
-      avg_green = sum_green * inv
-      avg_blue = sum_blue * inv
-      avg_x = sum_x * inv
-      avg_y = sum_y * inv
-    }
+  def calculateCenter(): Unit = {
+    // Optimization: using "inverse"
+    // to change divide to multiply
+    val inv = 1 / pixelCount
+    avg_red = sum_red * inv
+    avg_green = sum_green * inv
+    avg_blue = sum_blue * inv
+    avg_x = sum_x * inv
+    avg_y = sum_y * inv
+  }
 
-    def distance(x: Int, y: Int, red: Int, green: Int, blue: Int, S: Double, m: Double, w: Int, h: Int): Double = {
-      // power of color difference between given pixel and cluster center
-      val dx_color = (avg_red - red) * (avg_red - red) + (avg_green - green) * (avg_green - green) + (avg_blue - blue) * (avg_blue - blue)
-      // power of spatial difference between
-      val dx_spatial = (avg_x - x) * (avg_x - x) + (avg_y - y) * (avg_y - y)
-      // Calculate approximate distance with squares to get more accurate results
-      Math.sqrt(dx_color) + Math.sqrt(dx_spatial * inv)
-    }
+  def distance(x: Int, y: Int, red: Int, green: Int, blue: Int, S: Double, m: Double, w: Int, h: Int): Double = {
+    // power of color difference between given pixel and cluster center
+    val dx_color = (avg_red - red) * (avg_red - red) + (avg_green - green) * (avg_green - green) + (avg_blue - blue) * (avg_blue - blue)
+    // power of spatial difference between
+    val dx_spatial = (avg_x - x) * (avg_x - x) + (avg_y - y) * (avg_y - y)
+    // Calculate approximate distance with squares to get more accurate results
+    Math.sqrt(dx_color) + Math.sqrt(dx_spatial * inv)
   }
 }
