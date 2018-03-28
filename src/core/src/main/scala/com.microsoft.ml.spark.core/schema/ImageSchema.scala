@@ -3,6 +3,10 @@
 
 package com.microsoft.ml.spark.core.schema
 
+import java.awt.image.BufferedImage
+import java.io.ByteArrayInputStream
+import javax.imageio.ImageIO
+
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row}
 
@@ -26,6 +30,10 @@ object ImageSchema {
   def getWidth (row: Row): Int    = row.getInt(2)
   def getType  (row: Row): Int    = row.getInt(3)
   def getBytes (row: Row): Array[Byte] = row.getAs[Array[Byte]](4)
+
+  def toBufferedImage(row: Row): BufferedImage = {
+    ImageIO.read(new ByteArrayInputStream(getBytes(row)))
+  }
 
   /** Check if the dataframe column contains images (i.e. has imageSchema)
     *

@@ -5,7 +5,7 @@ package com.microsoft.ml.spark.cntk
 
 import com.microsoft.ml.spark.core.contracts.{HasFeaturesCol, HasLabelCol, HasOutputCol, Wrappable}
 import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
-import com.microsoft.ml.spark.core.schema.ImageSchema
+import com.microsoft.ml.spark.core.schema.{DatasetExtensions, ImageSchema}
 import com.microsoft.ml.spark.core.serialize.params.{EstimatorParam, TransformerParam, UDFParam}
 import com.microsoft.ml.spark.opencv.{ImageTransformer, UnrollImage}
 import com.microsoft.ml.spark.stages.basic.DropColumns
@@ -20,8 +20,8 @@ import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.functions.{col, explode, udf}
 import org.apache.spark.sql.types.{ArrayType, DataType, DoubleType, StructType}
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
-import scala.math.round
 
+import scala.math.round
 import scala.collection.JavaConversions._
 import scala.reflect.ClassTag
 
@@ -75,7 +75,7 @@ object LIME extends ComplexParamsReadable[LIME] {
   }
 
   def importanceMasking(threshold: Double = 0.0, greyscaleMask: Boolean = true): UserDefinedFunction =
-    udf({ case (baseImage: Row, mask: DenseVector) =>
+    udf({ x: (Row, DenseVector) => x match {case (baseImage: Row, mask: DenseVector) =>
       val dv = if (!greyscaleMask) {
         new DenseVector(UnrollImage.unroll(baseImage).toArray
           .zip(mask.toArray)
@@ -84,7 +84,7 @@ object LIME extends ComplexParamsReadable[LIME] {
         throw new NotImplementedError("need to fill this in")
       }
       UnrollImage.roll(dv, baseImage)
-    }, ImageSchema.columnSchema)
+    }}, ImageSchema.columnSchema)
 
 }
 
@@ -114,6 +114,25 @@ class LIME(val uid: String) extends Transformer
     setSampler(udf(f, ArrayType(elementType)))
   }
 
+  val preProcessor = new TransformerParam(this, "preProcessor",
+    "Transformation to apply before use the linear regression", {x: Transformer =>
+      x.hasParam("inputCol") & x.hasParam("outputCol")
+    })
+
+  def getPreProcessor: Transformer = $(preProcessor)
+
+  def setPreProcessor(v: Transformer): this.type = set(preProcessor, v)
+
+  val postProcessor = new TransformerParam(this, "postProcessor",
+    "Transformation to apply to the trained weights", {x: Transformer =>
+      x.hasParam("inputCol") & x.hasParam("outputCol")
+    })
+
+  def getPostProcessor: Transformer = $(postProcessor)
+
+  def setPostProcessor(v: Transformer): this.type = set(postProcessor, v)
+
+
   val nSamples = new IntParam(this, "nSamples", "The number of samples to generate if using a default sampler")
 
   def getNSamples: Int = $(nSamples)
@@ -129,41 +148,44 @@ class LIME(val uid: String) extends Transformer
     val df = dataset.toDF
     val model = getModel
 
-    val localModel = {
-      val lr = {
-        val lrInternal = new LinearRegression()
-          .setLabelCol(getLabelCol)
-          .setFeaturesCol(getFeaturesCol)
-        lrInternal.setPredictionCol(lrInternal.uid + "_prediction")
-      }
+    val localPredictionCol = DatasetExtensions
+      .findUnusedColumnName("localPrediction", df)
 
-      dataset.schema(getFeaturesCol).dataType match {
-        case dt if dt == ImageSchema.columnSchema =>
-          val ui = new UnrollImage().setInputCol(getFeaturesCol)
-          new Pipeline().setStages(Array(
-            ui,
-            lr.setFeaturesCol(ui.getOutputCol),
-            new DropColumns().setCol(ui.getOutputCol)))
-        case VectorType => lr
-        case DoubleType => lr
-      }
-    }
+    val localFeaturesCol = DatasetExtensions
+      .findUnusedColumnName("localFeatures", df)
+
+    val localModel = new LinearRegression()
+          .setLabelCol(getLabelCol)
+          .setFeaturesCol(localFeaturesCol)
+          .setPredictionCol(localPredictionCol)
+
+    val preProcessor = getPreProcessor
+      .set("inputCol", getFeaturesCol)
+      .set("outputCol", localFeaturesCol)
 
     val sampledIterator = df.toLocalIterator().map { row =>
       val localDF = df.sparkSession.createDataFrame(Seq(row), row.schema)
         .withColumn(getFeaturesCol, explode(getSampler(col(getFeaturesCol))))
-      val mappedLocalDF = model.transform(localDF)
+
+      val featurizedLocalDF = preProcessor.transform(localDF)
+      // this will have inputs, featurizedInputs
+
+      val mappedLocalDF = model.transform(featurizedLocalDF)
+      // This will have the inputs, featurizedInputs, and modelPredictions
+
       val coeffs = localModel.fit(mappedLocalDF) match {
         case lr: LinearRegressionModel => lr.coefficients
-        case pipe: PipelineModel => pipe.stages(pipe.stages.length - 2) match {
-          case lr: LinearRegressionModel => lr.coefficients
-        }
       }
       Row.merge(row, Row(coeffs))
     }
 
-    df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
+    val outputDF = df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
       .add(getOutputCol, VectorType))
+
+    getPostProcessor
+      .set("inputCol", getOutputCol)
+      .set("outputCol", getOutputCol)
+      .transform(outputDF)
   }
 
   override def copy(extra: ParamMap): Transformer = defaultCopy(extra)

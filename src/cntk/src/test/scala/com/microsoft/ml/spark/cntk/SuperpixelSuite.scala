@@ -20,19 +20,22 @@ class SuperpixelSuite extends CNTKTestUtils {
       rgbArray(x + y * height) = (red << 16) | (green << 8) | blue
     }
   }
-  img.setRGB(0,0,width,height,rgbArray,0,width)
+  img.setRGB(0, 0, width, height, rgbArray, 0, width)
 
   lazy val allClusters = sp.cluster(img, 16, 130)
   lazy val randomClusters = Superpixel.censorImage(img, allClusters.get, 0.25)
 
   test("Censored clusters' pixels should be black in the censored image") {
     val outputImg = randomClusters._1
-    randomClusters._3.zipWithIndex.foreach{ case (state, i) => { if (!state) {
-      randomClusters._2(i).pixels.foreach(pt => {
-        val color = new Color(outputImg.getRGB(pt._1, pt._2))
-        assert(color.getRed === 0 && color.getGreen === 0 && color.getBlue === 0)
-      })
-    }}}
+    randomClusters._3.zipWithIndex.foreach { case (state, i) => {
+      if (!state) {
+        randomClusters._2(i).pixels.foreach(pt => {
+          val color = new Color(outputImg.getRGB(pt._1, pt._2))
+          assert(color.getRed === 0 && color.getGreen === 0 && color.getBlue === 0)
+        })
+      }
+    }
+    }
   }
 
   test("The correct censored image gets created from clusters and their states") {
@@ -40,7 +43,7 @@ class SuperpixelSuite extends CNTKTestUtils {
     val imageFromStates = Superpixel.createImage(img, randomClusters._2, randomClusters._3)
 
     assert(outputImg.getWidth === imageFromStates.getWidth &&
-    outputImg.getHeight === imageFromStates.getHeight)
+      outputImg.getHeight === imageFromStates.getHeight)
 
     for (x <- 0 until outputImg.getWidth) {
       for (y <- 0 until outputImg.getHeight) {
