@@ -8,7 +8,6 @@ import javax.imageio.ImageIO
 import javax.swing.{ImageIcon, JFrame, JLabel}
 
 import com.microsoft.ml.spark.core.schema.ImageSchema
-import org.apache.avro.generic.GenericData.StringType
 import org.apache.spark.sql.Row
 import org.apache.spark.sql.expressions.UserDefinedFunction
 import org.apache.spark.sql.types.{ArrayType, IntegerType, StructType}
@@ -25,19 +24,23 @@ import org.apache.spark.sql.functions.udf
 object Superpixel {
 
   val pointSchema = new StructType().add("x", IntegerType).add("y", IntegerType)
-  val cluserSchema =  ArrayType(pointSchema)
-  val clusteredImageSchema = ArrayType(cluserSchema)
+  val clusterSchema =  ArrayType(pointSchema)
+  val clusteredImageSchema = ArrayType(clusterSchema)
 
   def getSuperpixelUDF(cellSize: Double, modifier: Double): UserDefinedFunction = udf({ row: Row =>
     val img = ImageSchema.toBufferedImage(row)
     new Superpixel().cluster(img, cellSize, modifier).get
       .map(_.pixels)
-  }, Superpixel.clusteredImageSchema())
+  }, Superpixel.clusteredImageSchema)
+
+  def getCensorUDF: UserDefinedFunction = udf({ img: (Row, Array[Cluster], Array[Boolean]) =>
+    censorImage(ImageSchema.toBufferedImage(img._1), img._2, img._3)
+  }, ImageSchema.columnSchema)
 
   def displayImage(img: BufferedImage): Unit = {
     val frame: JFrame = new JFrame()
-    frame.getContentPane().setLayout(new FlowLayout())
-    frame.getContentPane().add(new JLabel(new ImageIcon(img)))
+    frame.getContentPane.setLayout(new FlowLayout())
+    frame.getContentPane.add(new JLabel(new ImageIcon(img)))
     frame.pack()
     frame.setVisible(true)
   }
@@ -73,15 +76,7 @@ object Superpixel {
     b
   }
 
-  def censorImage(img: BufferedImage,
-                  allClusters: Array[Cluster],
-                  decInclude: Double = 1.0): (BufferedImage, Array[Cluster], Array[Boolean]) = {
-    val clusterStates = allClusters.map(c => Random.nextDouble <= decInclude)
-    val censoredImage = createImage(img, allClusters, clusterStates)
-    (censoredImage, allClusters, clusterStates)
-  }
-
-  def createImage(img: BufferedImage, allClusters: Array[Cluster], clusterStates: Array[Boolean]): BufferedImage = {
+  def censorImage(img: BufferedImage, allClusters: Array[Cluster], clusterStates: Array[Boolean]): BufferedImage = {
     val output = copyImage(img)
 
     allClusters.zipWithIndex.foreach { case (c, i) => {
@@ -100,20 +95,16 @@ object Superpixel {
     output
   }
 
-  def censoredImageSampler(decInclude: Double = 1.0,
-                           cellSize: Double,
-                           modifier: Double):
-  BufferedImage => Iterator[(BufferedImage, Array[Cluster], Array[Boolean])] = { x: BufferedImage =>
-    val p: Superpixel = new Superpixel()
-    val allClusters = p.cluster(x, cellSize, modifier)
-    new Iterator[(BufferedImage, Array[Cluster], Array[Boolean])] {
+  def clusterStateSampler(decInclude: Double, size: Int): Iterator[Array[Boolean]] =
+    new Iterator[Array[Boolean]] {
       override def hasNext: Boolean = true
 
-      override def next(): (BufferedImage, Array[Cluster], Array[Boolean]) = {
-        censorImage(x, allClusters.get, decInclude)
+      override def next(): Array[Boolean] = {
+        Array.fill(size) {
+          Random.nextDouble() > decInclude
+        }
       }
     }
-  }
 }
 
 class Superpixel() {
@@ -154,13 +145,13 @@ class Superpixel() {
         blues.get(pos) = color >> 0 & 0x000000FF
 
         {
-          x += 1;
+          x += 1
           x - 1
         }
       }
 
       {
-        y += 1;
+        y += 1
         y - 1
       }
     }
@@ -201,19 +192,19 @@ class Superpixel() {
             }
             // end for x
             {
-              x += 1;
+              x += 1
               x - 1
             }
           }
           // end for y
           {
-            y += 1;
+            y += 1
             y - 1
           }
         }
         // end for clusters
         {
-          i += 1;
+          i += 1
           i - 1
         }
       }
@@ -223,7 +214,7 @@ class Superpixel() {
         clusters.get(index).reset()
 
         {
-          index += 1;
+          index += 1
           index - 1
         }
       }
@@ -236,13 +227,13 @@ class Superpixel() {
           clusters.get(labels.get(pos)).addPixel(x, y, reds.get(pos), greens.get(pos), blues.get(pos))
 
           {
-            x += 1;
+            x += 1
             x - 1
           }
         }
 
         {
-          y += 1;
+          y += 1
           y - 1
         }
       }
@@ -252,7 +243,7 @@ class Superpixel() {
         clusters.get(idx).calculateCenter()
 
         {
-          idx += 1;
+          idx += 1
           idx - 1
         }
       }
@@ -271,13 +262,13 @@ class Superpixel() {
         else result.setRGB(x, y, image.getRGB(x, y))
 
         {
-          x += 1;
+          x += 1
           x - 1
         }
       }
 
       {
-        y += 1;
+        y += 1
         y - 1
       }
     }
@@ -322,10 +313,7 @@ class Superpixel() {
     var i = 0
     while (i < temp.size) {
       clusters.get(i) = temp.elementAt(i)
-
-      {i += 1;
-        i - 1
-      }
+      i += 1
     }
   }
 }

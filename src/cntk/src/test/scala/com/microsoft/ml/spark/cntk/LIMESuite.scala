@@ -3,6 +3,7 @@
 
 package com.microsoft.ml.spark.cntk
 
+import java.awt.image.BufferedImage
 import java.net.URI
 
 import com.microsoft.ml.spark.core.env.FileUtilities.File
@@ -14,14 +15,14 @@ import org.apache.spark.ml.regression.LinearRegression
 import org.apache.spark.ml.util.MLReadable
 import org.apache.spark.sql.DataFrame
 import com.microsoft.ml.spark.Readers.implicits._
+import com.microsoft.ml.spark.core.schema.ImageSchema
 import com.microsoft.ml.spark.stages.basic.UDFTransformer
 import org.apache.spark.ml.NamespaceInjections
 import com.microsoft.ml.spark.udfs.udfs.get_value_at
 import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.types.DoubleType
 
-
-class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageFeaturizerUtils {
+class LIMESuite extends TransformerFuzzing[ImageLIME] with FuzzingMethods with ImageFeaturizerUtils {
 
   lazy val x = (0 to 10).map(_.toDouble)
   lazy val y = x.map(_ * 7)
@@ -32,7 +33,7 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageF
   lazy val lr = new LinearRegression().setFeaturesCol("_1").setLabelCol("_2")
   lazy val fitlr = lr.fit(df)
 
-  lazy val t = new LIME()
+  lazy val t = new ImageLIME()
     .setModel(fitlr)
     .setLabelCol(fitlr.getPredictionCol)
     .setSampler[Vector](
@@ -41,11 +42,13 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageF
         Vectors.dense(arr(0) + scala.util.Random.nextGaussian())
       }.toArray
     }, VectorType)
-    .setFeaturesCol("_1")
+    //.setFeaturesCol("_1")
     .setOutputCol("weights")
 
   test("LIME should identify the local slope") {
-    t.transform(df).select("weights").collect.foreach(row =>
+    // TODO - set default values for cell size (16), modifier (130), input col, etc.
+    t.setCellSize(16).setModifier(130).setInputCol("_1").transform(df)
+      .select("weights").collect.foreach(row =>
       assert(7.0 === row.getAs[Vector](0)(0))
     )
   }
@@ -66,11 +69,12 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageF
     lazy val lr = new LinearRegression().setFeaturesCol("_1").setLabelCol("_2")
     lazy val fitlr = lr.fit(df)
 
-    lazy val t = new LIME()
+    lazy val t = new ImageLIME()
       .setModel(fitlr)
       .setLabelCol(fitlr.getPredictionCol)
-      .setFeaturesCol("_1")
+      //.setFeaturesCol("_1")
       .setOutputCol("weights")
+      .setInputCol("_1")
 
     t.transform(df).select("weights")
       .collect()
@@ -89,17 +93,17 @@ class LIMESuite extends TransformerFuzzing[LIME] with FuzzingMethods with ImageF
         .setUDF(udf({vec: org.apache.spark.ml.linalg.Vector => vec(0)}, DoubleType))
     ))
 
-    lazy val t = new LIME()
+    lazy val t = new ImageLIME()
       .setModel(model)
       .setLabelCol(outputCol)
-      .setFeaturesCol(inputCol)
+      //.setFeaturesCol(inputCol)
       .setOutputCol("weights")
       .setNSamples(10)
 
     t.transform(images.limit(2)).show()
   }
 
-  override def testObjects(): Seq[TestObject[LIME]] = Seq(new TestObject(t, df))
+  override def testObjects(): Seq[TestObject[ImageLIME]] = Seq(new TestObject(t, df))
 
-  override def reader: MLReadable[_] = LIME
+  override def reader: MLReadable[_] = ImageLIME
 }

@@ -19,6 +19,8 @@ import org.apache.spark.sql.DataFrame
 
 trait ImageFeaturizerUtils extends CNTKTestUtils {
   val images: DataFrame = session.readImages(imagePath, true).withColumnRenamed("image", inputCol)
+  lazy val groceriesPath = s"${sys.env("DATASETS_HOME")}/Images/Grocery/"
+  val groceryImages: DataFrame = session.readImages(groceriesPath, true).withColumnRenamed("image", inputCol)
 
   val modelDir = new File(filesRoot, "CNTKModel")
   val modelDownloader = new ModelDownloader(session, modelDir.toURI)

@@ -3,7 +3,7 @@
 
 package com.microsoft.ml.spark.cntk
 
-import com.microsoft.ml.spark.core.contracts.{HasFeaturesCol, HasLabelCol, HasOutputCol, Wrappable}
+import com.microsoft.ml.spark.core.contracts._
 import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
 import com.microsoft.ml.spark.core.schema.{DatasetExtensions, ImageSchema}
 import com.microsoft.ml.spark.core.serialize.params.{EstimatorParam, TransformerParam, UDFParam}
@@ -12,7 +12,7 @@ import com.microsoft.ml.spark.stages.basic.DropColumns
 import org.apache.spark.ml.classification.{LogisticRegression, LogisticRegressionModel}
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
 import org.apache.spark.ml.linalg.{DenseVector, Vector => SparkVector}
-import org.apache.spark.ml.param.{IntParam, ParamMap}
+import org.apache.spark.ml.param.{DoubleParam, IntParam, ParamMap}
 import org.apache.spark.ml.regression.{LinearRegression, LinearRegressionModel}
 import org.apache.spark.ml.util.{ComplexParamsReadable, ComplexParamsWritable, Identifiable}
 import org.apache.spark.ml._
@@ -25,7 +25,7 @@ import scala.math.round
 import scala.collection.JavaConversions._
 import scala.reflect.ClassTag
 
-object LIME extends ComplexParamsReadable[LIME] {
+object ImageLIME extends ComplexParamsReadable[ImageLIME] {
 
   def doubleSampler(scale: Double): Double => Iterator[Double] = { x: Double =>
     new Iterator[Double] {
@@ -93,8 +93,8 @@ object LIME extends ComplexParamsReadable[LIME] {
   *
   * https://arxiv.org/pdf/1602.04938v1.pdf
   */
-class LIME(val uid: String) extends Transformer
-  with HasFeaturesCol with HasOutputCol with HasLabelCol
+class ImageLIME(val uid: String) extends Transformer
+  with HasInputCol with HasOutputCol with HasLabelCol
   with Wrappable with ComplexParamsWritable {
   def this() = this(Identifiable.randomUID("LIME"))
 
@@ -139,11 +139,32 @@ class LIME(val uid: String) extends Transformer
 
   def setNSamples(v: Int): this.type = set(nSamples, v)
 
-  setDefault(nSamples -> 100)
+  val decToInclude = new DoubleParam(this, "decToInclude", "TODO: doc string")
+
+  def getDecToInclude: Double = $(decToInclude)
+
+  def setDecToInclude(d: Double): this.type = set(decToInclude, d)
+
+  val cellSize = new DoubleParam(this, "cellSize", "TODO: doc string")
+
+  def getCellSize: Double = $(cellSize)
+
+  def setCellSize(d: Double): this.type = set(cellSize, d)
+
+  val modifier = new DoubleParam(this, "modifier", "TODO: doc string")
+
+  def getModifier: Double = $(modifier)
+
+  def setModifier(d: Double): this.type = set(modifier, d)
+
+  setDefault(nSamples -> 100, cellSize -> 16, modifier -> 130, decToInclude -> 0.3)
 
   override def transform(dataset: Dataset[_]): DataFrame = {
+    import dataset.sparkSession.implicits._
+    import org.apache.spark.sql.functions.lit
+
     if (get(sampler).isEmpty) {
-      setSampler(LIME.defaultFiniteSampler(dataset.schema(getFeaturesCol).dataType, getNSamples))
+      setSampler(ImageLIME.defaultFiniteSampler(dataset.schema(getInputCol).dataType, getNSamples))
     }
     val df = dataset.toDF
     val model = getModel
@@ -159,33 +180,52 @@ class LIME(val uid: String) extends Transformer
           .setFeaturesCol(localFeaturesCol)
           .setPredictionCol(localPredictionCol)
 
-    val preProcessor = getPreProcessor
-      .set("inputCol", getFeaturesCol)
-      .set("outputCol", localFeaturesCol)
+    // Data frame with new column containing superpixels (Array[Cluster]) for each row (image)
+    val superTransformer = new SuperpixelTransformer().setCellSize(getCellSize).setModifier(getModifier).
+      setInputCol(getInputCol).setOutputCol("Superpixels")
 
-    val sampledIterator = df.toLocalIterator().map { row =>
-      val localDF = df.sparkSession.createDataFrame(Seq(row), row.schema)
-        .withColumn(getFeaturesCol, explode(getSampler(col(getFeaturesCol))))
+    val superDF = superTransformer.transform(df)
 
-      val featurizedLocalDF = preProcessor.transform(localDF)
-      // this will have inputs, featurizedInputs
+    // Indices of the columns containing each image and image's superpixels
+    val imageIndex = superDF.schema.fieldIndex(superTransformer.getInputCol)
+    val superpixelIndex = superDF.schema.fieldIndex(superTransformer.getOutputCol)
 
-      val mappedLocalDF = model.transform(featurizedLocalDF)
-      // This will have the inputs, featurizedInputs, and modelPredictions
+    // Collects to head node and creates a data frame from each row (image)
+    val sampledIterator = superDF.toLocalIterator().map { row =>
 
-      val coeffs = localModel.fit(mappedLocalDF) match {
+      // Gets the image from the row
+      val image = row.getStruct(imageIndex)
+
+      // Gets the superpixels from the row
+      val superpixels = row.getAs[Array[Array[Row]]](superpixelIndex)
+
+      // Generate samples for the image
+      val sampler = Superpixel.clusterStateSampler(getDecToInclude, superpixels.length)
+
+      val samples: List[Array[Boolean]] = sampler.take(getNSamples).toList
+
+      // Creates a new data frame for each image, containing samples of cluster states
+      val imageDF = samples.toDF("States")
+        .withColumn("Image", lit(image))
+        .withColumn("Superpixels", lit(superpixels))
+
+      val censoredDF = imageDF.withColumn("CensoredImage",
+        Superpixel.getCensorUDF(col("Image"), col("Superpixels"), col("States")))
+
+      // Maps the data frame through the deep model
+      val mappedLocalDF = model.transform(censoredDF)
+
+      // Fits the data frame to the local model (regression), outputting the weights of importance
+      val coefficients = localModel.fit(mappedLocalDF) match {
         case lr: LinearRegressionModel => lr.coefficients
       }
-      Row.merge(row, Row(coeffs))
+      Row.merge(row, Row(coefficients))
     }
 
     val outputDF = df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
       .add(getOutputCol, VectorType))
 
-    getPostProcessor
-      .set("inputCol", getOutputCol)
-      .set("outputCol", getOutputCol)
-      .transform(outputDF)
+    outputDF
   }
 
   override def copy(extra: ParamMap): Transformer = defaultCopy(extra)
