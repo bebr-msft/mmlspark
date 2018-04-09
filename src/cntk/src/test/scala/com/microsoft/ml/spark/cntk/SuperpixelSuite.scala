@@ -2,9 +2,12 @@ package com.microsoft.ml.spark.cntk
 
 import java.awt.Color
 import java.awt.image.BufferedImage
+import java.io.ByteArrayOutputStream
+import javax.imageio.ImageIO
 
-import com.microsoft.ml.spark.core.test.datagen.{DatasetMissingValuesGenerationOptions, GenerateDataset}
-import org.apache.spark.sql.functions.lit
+import com.microsoft.ml.spark.IO.image.ImageReader
+import org.apache.spark.sql.functions.{col, udf}
+import org.apache.spark.sql.types.StringType
 
 import scala.util.Random
 
@@ -27,11 +30,15 @@ class SuperpixelSuite extends CNTKTestUtils {
   }
   img.setRGB(0, 0, width, height, rgbArray, 0, width)
 
-  lazy val allClusters = sp.cluster(img, 16, 130)
-  lazy val states = Array.fill(allClusters.get.length) {
+  lazy val allClusters: Array[Cluster] = sp.cluster(img, 16, 130).get
+  lazy val states: Array[Boolean] = Array.fill(allClusters.length) {
     Random.nextDouble() > 0.5
   }
-  lazy val censoredImg = Superpixel.censorImage(img, allClusters.get, states)
+
+  val superpixels: SuperpixelData = SuperpixelData.fromArrCluster(allClusters)
+
+  lazy val censoredImg: BufferedImage = Superpixel.censorImage(
+    ImageReader.decode(img).get, superpixels, states)
 
   test("ToList should work on an iterator") {
     val sampler = Superpixel.clusterStateSampler(0.3, 1000)
@@ -41,11 +48,27 @@ class SuperpixelSuite extends CNTKTestUtils {
 
   test("Censored clusters' pixels should be black in the censored image") {
     for (i <- states.indices if !states(i)) {
-      allClusters.get(i).pixels.foreach(pt => {
-        val color = new Color(censoredImg.getRGB(pt._1, pt._2))
+      allClusters(i).pixels.foreach { case (x: Int, y: Int) =>
+        val color = new Color(censoredImg.getRGB(x, y))
         assert(color.getRed === 0 && color.getGreen === 0 && color.getBlue === 0)
-      })
+      }
     }
+  }
+
+  test("image censoring udf"){
+    import session.implicits._
+    val df = List.fill(100)((2, "foo")).toDF("foo","bar")
+
+    def simpleFunc(x: Int, y:String): String = y*x
+
+    val df2 = df.withColumn("baz", udf(simpleFunc _, StringType)(col("foo"), col("bar")))
+    df2.show()
+
+  }
+
+  test("superpixel transformer works"){
+
+
   }
 
 //  test("The correct censored image gets created from clusters and their states") {

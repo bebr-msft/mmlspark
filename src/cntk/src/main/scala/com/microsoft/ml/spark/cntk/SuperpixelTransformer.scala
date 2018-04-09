@@ -34,10 +34,11 @@ class SuperpixelTransformer(val uid: String) extends Transformer
 
   def setModifier(v: Double): this.type = set(modifier, v)
 
-  setDefault(cellSize->16.0, modifier->130.0)
+  setDefault(cellSize->16.0, modifier->130.0, outputCol->s"${uid}_output")
 
   override def transform(dataset: Dataset[_]): DataFrame = {
-    dataset.toDF().withColumn(getOutputCol, Superpixel.getSuperpixelUDF(getCellSize, getModifier)(col(getInputCol)))
+    dataset.toDF().withColumn(getOutputCol,
+      Superpixel.getSuperpixelUDF(getCellSize, getModifier)(col(getInputCol)))
   }
 
   override def copy(extra: ParamMap): Transformer = defaultCopy(extra)
@@ -49,7 +50,7 @@ class SuperpixelTransformer(val uid: String) extends Transformer
     */
   override def transformSchema(schema: StructType): StructType = {
     assert(schema(getInputCol).dataType == ImageSchema.columnSchema)
-    schema.add(getOutputCol, Superpixel.clusteredImageSchema)
+    schema.add(getOutputCol, SuperpixelData.schema)
   }
 
 }

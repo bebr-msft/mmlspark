@@ -7,35 +7,76 @@ import java.util
 import javax.imageio.ImageIO
 import javax.swing.{ImageIcon, JFrame, JLabel}
 
-import com.microsoft.ml.spark.core.schema.ImageSchema
+import com.microsoft.ml.spark.IO.image.ImageReader
+import com.microsoft.ml.spark.core.schema.{ImageData, ImageSchema}
 import org.apache.spark.sql.Row
+import org.apache.spark.sql.catalyst.ScalaReflection
 import org.apache.spark.sql.expressions.UserDefinedFunction
-import org.apache.spark.sql.types.{ArrayType, IntegerType, StructType}
+import org.apache.spark.sql.functions.udf
+import org.apache.spark.sql.types.DataType
 
+import scala.collection.mutable
 import scala.collection.mutable.ArrayBuffer
 import scala.util.Random
-import org.apache.spark.sql.functions.udf
+
+case class PixelData(x: Int, y: Int)
+
+object PixelData {
+  def fromRow(r: Row) = PixelData(r.getInt(0), r.getInt(1))
+
+  val schema: DataType = ScalaReflection.schemaFor[PixelData].dataType
+}
+
+case class ClusterData(pixels: Array[PixelData])
+
+object ClusterData {
+  val schema: DataType =  ScalaReflection.schemaFor[ClusterData].dataType
+
+  def fromCluster(c: Cluster) =
+    ClusterData(c.pixels.map(p => PixelData(p._1, p._2)).toArray)
+
+  def fromRow(r: Row): ClusterData = {
+    ClusterData(r.getAs[mutable.WrappedArray[Row]](0).map(PixelData.fromRow).toArray)
+  }
+}
+
+case class SuperpixelData(clusters: Array[ClusterData])
+
+object SuperpixelData {
+  val schema: DataType =  ScalaReflection.schemaFor[SuperpixelData].dataType
+
+  def fromRow(r: Row): SuperpixelData = {
+    val clusters = r.getAs[mutable.WrappedArray[Row]](0)
+    SuperpixelData(clusters.map(ClusterData.fromRow).toArray)
+  }
+
+  def fromSuperpixel(sp: Superpixel): SuperpixelData = {
+    SuperpixelData(sp.clusters.get.map(ClusterData.fromCluster))
+  }
+
+  def fromArrCluster(arrCluster: Array[Cluster]): SuperpixelData = {
+    SuperpixelData(arrCluster.map(ClusterData.fromCluster))
+  }
+}
 
 /**
   * Based on "Superpixel algorithm implemented in Java" at
   *   popscan.blogspot.com/2014/12/superpixel-algorithm-implemented-in-java.html
   */
-
 object Superpixel {
 
-  val pointSchema = new StructType().add("x", IntegerType).add("y", IntegerType)
-  val clusterSchema =  ArrayType(pointSchema)
-  val clusteredImageSchema = ArrayType(clusterSchema)
+  def getSuperpixelUDF(cellSize: Double, modifier: Double): UserDefinedFunction = udf(
+    { row: Row => SuperpixelData.fromArrCluster(
+      new Superpixel().cluster(ImageSchema.toBufferedImage(row), cellSize, modifier).get
+    )},
+    SuperpixelData.schema)
 
-  def getSuperpixelUDF(cellSize: Double, modifier: Double): UserDefinedFunction = udf({ row: Row =>
-    val img = ImageSchema.toBufferedImage(row)
-    new Superpixel().cluster(img, cellSize, modifier).get
-      .map(_.pixels)
-  }, Superpixel.clusteredImageSchema)
+  def censorImageHelper(img: Row, sp: Row, states: mutable.WrappedArray[Boolean]): Row = {
+    val bi = censorImage(img, SuperpixelData.fromRow(sp), states.toArray)
+    ImageReader.decode(bi).get
+  }
 
-  def getCensorUDF: UserDefinedFunction = udf({ img: (Row, Array[Cluster], Array[Boolean]) =>
-    censorImage(ImageSchema.toBufferedImage(img._1), img._2, img._3)
-  }, ImageSchema.columnSchema)
+  val censorUDF: UserDefinedFunction = udf(censorImageHelper _, ImageSchema.columnSchema)
 
   def displayImage(img: BufferedImage): Unit = {
     val frame: JFrame = new JFrame()
@@ -76,21 +117,21 @@ object Superpixel {
     b
   }
 
-  def censorImage(img: BufferedImage, allClusters: Array[Cluster], clusterStates: Array[Boolean]): BufferedImage = {
+  def censorImage(imgRow: Row, superpixels: SuperpixelData, clusterStates: Array[Boolean]): BufferedImage = {
+    val img = ImageSchema.toBufferedImage(imgRow)
     val output = copyImage(img)
 
-    allClusters.zipWithIndex.foreach { case (c, i) => {
+    superpixels.clusters.zipWithIndex.foreach { case (c, i) =>
       if (!clusterStates(i)) {
         c.pixels.foreach(pt => {
-          output.setRGB(pt._1, pt._2, 0x000000)
+          output.setRGB(pt.x, pt.y, 0x000000)
         })
       }
       else {
         c.pixels.foreach(pt => {
-          output.setRGB(pt._1, pt._2, img.getRGB(pt._1, pt._2))
+          output.setRGB(pt.x, pt.y, img.getRGB(pt.x, pt.y))
         })
       }
-    }
     }
     output
   }
@@ -134,25 +175,13 @@ class Superpixel() {
     reds = Some(new Array[Int](width * height))
     greens = Some(new Array[Int](width * height))
     blues = Some(new Array[Int](width * height))
-    var y = 0
-    while (y < height) {
-      var x = 0
-      while (x < width) {
+    (0 until height).foreach {y =>
+      (0 until width).foreach {x =>
         val pos = x + y * width
         val color = pixels(pos)
         reds.get(pos) = color >> 16 & 0x000000FF
         greens.get(pos) = color >> 8 & 0x000000FF
         blues.get(pos) = color >> 0 & 0x000000FF
-
-        {
-          x += 1
-          x - 1
-        }
-      }
-
-      {
-        y += 1
-        y - 1
       }
     }
     // create clusters
@@ -164,8 +193,7 @@ class Superpixel() {
       pixelChangedCluster = false
       loops += 1
       // for each cluster center C
-      var i = 0
-      while (i < clusters.get.length) {
+      clusters.get.indices.foreach { i =>
         val c = clusters.get(i)
         // for each pixel i in 2S region around
         // cluster center
@@ -173,14 +201,8 @@ class Superpixel() {
         val ys = Math.max((c.avg_y - cellSize).toInt, 0)
         val xe = Math.min((c.avg_x + cellSize).toInt, width)
         val ye = Math.min((c.avg_y + cellSize).toInt, height)
-        y = ys
-        while ( {
-          y < ye
-        }) {
-          var x = xs
-          while ( {
-            x < xe
-          }) {
+        (ys until ye).foreach {y =>
+          (xs until xe).foreach {x =>
             val pos = x + width * y
             val D = c.distance(x, y,
               reds.get(pos), greens.get(pos), blues.get(pos),
@@ -190,69 +212,26 @@ class Superpixel() {
               labels.get(pos) = c.id
               pixelChangedCluster = true
             }
-            // end for x
-            {
-              x += 1
-              x - 1
-            }
           }
-          // end for y
-          {
-            y += 1
-            y - 1
-          }
-        }
-        // end for clusters
-        {
-          i += 1
-          i - 1
         }
       }
       // reset clusters
-      var index = 0
-      while (index < clusters.get.length) {
+      clusters.get.indices.foreach {index =>
         clusters.get(index).reset()
-
-        {
-          index += 1
-          index - 1
-        }
       }
       // add every pixel to cluster based on label
-      y = 0
-      while (y < height) {
-        var x = 0
-        while (x < width) {
+      (0 until height).foreach {y =>
+        (0 until width).foreach {x =>
           val pos = x + y * width
           clusters.get(labels.get(pos)).addPixel(x, y, reds.get(pos), greens.get(pos), blues.get(pos))
-
-          {
-            x += 1
-            x - 1
-          }
-        }
-
-        {
-          y += 1
-          y - 1
         }
       }
       // calculate centers
-      var idx = 0
-      while (idx < clusters.get.length) {
-        clusters.get(idx).calculateCenter()
-
-        {
-          idx += 1
-          idx - 1
-        }
-      }
+      clusters.get.foreach {_.calculateCenter()}
     }
     // Create output image with pixel edges
-    y = 1
-    while (y < height - 1) {
-      var x = 1
-      while (x < width - 1) {
+    (1 until height - 1).foreach {y =>
+      (1 until width - 1).foreach {x =>
         val id1 = labels.get(x + y * width)
         val id2 = labels.get((x + 1) + y * width)
         val id3 = labels.get(x + (y + 1) * width)
@@ -260,16 +239,6 @@ class Superpixel() {
           result.setRGB(x, y, 0x000000)
         }
         else result.setRGB(x, y, image.getRGB(x, y))
-
-        {
-          x += 1
-          x - 1
-        }
-      }
-
-      {
-        y += 1
-        y - 1
       }
     }
 
@@ -303,10 +272,8 @@ class Superpixel() {
         val c = new Cluster(id, reds.get(pos), greens.get(pos), blues.get(pos), x.toInt, y.toInt, cellSize, modifier)
         temp.add(c)
         id += 1
-
         x += cellSize
       }
-
       y += cellSize
     }
     clusters = Some(new Array[Cluster](temp.size))

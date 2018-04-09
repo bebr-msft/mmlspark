@@ -30,34 +30,11 @@ import org.opencv.imgproc.Imgproc
 
 class ImageLIMESuite extends FuzzingMethods with ImageFeaturizerUtils {
 
-//  lazy val x = (0 to 10).map(_.toDouble)
-//  lazy val y = x.map(_ * 7)
-
-  //lazy val df: DataFrame = session
-  //  .createDataFrame(x.map(Vectors.dense(_)).zip(y))
-
-  //lazy val lr = new LinearRegression().setFeaturesCol("_1").setLabelCol("_2")
   lazy val featurizer = new ImageFeaturizer()
-//  lazy val fitlr = lr.fit(df)
-//
-//  lazy val t = new ImageLIME()
-//    .setModel(fitlr)
-//    .setLabelCol(fitlr.getPredictionCol)
-//    .setSampler[Vector](
-//    { arr: Vector =>
-//      (1 to 10).map { i =>
-//        Vectors.dense(arr(0) + scala.util.Random.nextGaussian())
-//      }.toArray
-//    }, VectorType)
-//    //.setFeaturesCol("_1")
-//    .setOutputCol("weights")
 
   test("Image featurizer should work with ResNet50", TestBase.Extended) {
     val resNet = resNetModel()
-    val getEntryUdf = udf({
-      vec: org.apache.spark.ml.linalg.Vector =>
-        vec(0)
-    }, DoubleType)
+    val getEntryUdf = udf({vec: org.apache.spark.ml.linalg.Vector => vec(0)}, DoubleType)
     val udfTransformer = new UDFTransformer()
       .setInputCol(resNet.getOutputCol)
       .setOutputCol(resNet.getOutputCol)
@@ -70,8 +47,14 @@ class ImageLIMESuite extends FuzzingMethods with ImageFeaturizerUtils {
       .setOutputCol("weights")
       .setInputCol(inputCol)
 
+    val it = new ImageTransformer()
+      .setInputCol(inputCol)
+      .setOutputCol(inputCol)
+      .resize(500, 500)
+
     lazy val testImagesPath = s"${groceriesPath}testImages/"
-    val testImages: DataFrame = session.readImages(testImagesPath, true).withColumnRenamed("image", inputCol)
+    val testImages: DataFrame = it.transform(session
+      .readImages(testImagesPath, true).withColumnRenamed("image", inputCol))
 
     val count = lime.transform(testImages).count
     println(count)

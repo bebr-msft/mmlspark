@@ -3,30 +3,24 @@
 
 package com.microsoft.ml.spark.cntk
 
-import java.awt.image.BufferedImage
-
 import com.microsoft.ml.spark.core.contracts._
-import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
 import com.microsoft.ml.spark.core.schema.{DatasetExtensions, ImageSchema}
-import com.microsoft.ml.spark.core.serialize.params.{EstimatorParam, TransformerParam, UDFParam}
-import com.microsoft.ml.spark.opencv.{ImageTransformer, UnrollImage}
-import com.microsoft.ml.spark.stages.basic.DropColumns
-import org.apache.spark.ml.classification.{LogisticRegression, LogisticRegressionModel}
+import com.microsoft.ml.spark.core.serialize.params.TransformerParam
+import com.microsoft.ml.spark.opencv.UnrollImage
+import org.apache.spark.ml._
 import org.apache.spark.ml.linalg.SQLDataTypes.VectorType
 import org.apache.spark.ml.linalg.{DenseVector, Vector => SparkVector}
 import org.apache.spark.ml.param.{DoubleParam, IntParam, ParamMap}
 import org.apache.spark.ml.regression.{LinearRegression, LinearRegressionModel}
 import org.apache.spark.ml.util.{ComplexParamsReadable, ComplexParamsWritable, Identifiable}
-import org.apache.spark.ml._
+import org.apache.spark.sql.catalyst.encoders.RowEncoder
 import org.apache.spark.sql.expressions.UserDefinedFunction
-import org.apache.spark.sql.functions.{col, explode, udf}
-import org.apache.spark.sql.types.{ArrayType, DataType, DoubleType, StructType}
+import org.apache.spark.sql.functions.{col, udf}
+import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
-import scala.math.round
 import scala.collection.JavaConversions._
 import scala.collection.mutable
-import scala.collection.mutable.ListBuffer
 import scala.reflect.ClassTag
 
 object ImageLIME extends ComplexParamsReadable[ImageLIME] {
@@ -79,16 +73,19 @@ object ImageLIME extends ComplexParamsReadable[ImageLIME] {
   }
 
   def importanceMasking(threshold: Double = 0.0, greyscaleMask: Boolean = true): UserDefinedFunction =
-    udf({ x: (Row, DenseVector) => x match {case (baseImage: Row, mask: DenseVector) =>
-      val dv = if (!greyscaleMask) {
-        new DenseVector(UnrollImage.unroll(baseImage).toArray
-          .zip(mask.toArray)
-          .map { case (e, m) => if (m > threshold) e else 0.0 })
-      } else {
-        throw new NotImplementedError("need to fill this in")
+    udf({ x: (Row, DenseVector) =>
+      x match {
+        case (baseImage: Row, mask: DenseVector) =>
+          val dv = if (!greyscaleMask) {
+            new DenseVector(UnrollImage.unroll(baseImage).toArray
+              .zip(mask.toArray)
+              .map { case (e, m) => if (m > threshold) e else 0.0 })
+          } else {
+            throw new NotImplementedError("need to fill this in")
+          }
+          UnrollImage.roll(dv, baseImage)
       }
-      UnrollImage.roll(dv, baseImage)
-    }}, ImageSchema.columnSchema)
+    }, ImageSchema.columnSchema)
 
 }
 
@@ -108,46 +105,17 @@ class ImageLIME(val uid: String) extends Transformer
 
   def setModel(v: Transformer): this.type = set(model, v)
 
-  val sampler = new UDFParam(this, "sampler", "The sampler to generate local candidates to regress")
-
-  def getSampler: UserDefinedFunction = $(sampler)
-
-  def setSampler(v: UserDefinedFunction): this.type = set(sampler, v)
-
-  def setSampler[T](f: T => Array[T], elementType: DataType): this.type = {
-    setSampler(udf(f, ArrayType(elementType)))
-  }
-
-  val preProcessor = new TransformerParam(this, "preProcessor",
-    "Transformation to apply before use the linear regression", {x: Transformer =>
-      x.hasParam("inputCol") & x.hasParam("outputCol")
-    })
-
-  def getPreProcessor: Transformer = $(preProcessor)
-
-  def setPreProcessor(v: Transformer): this.type = set(preProcessor, v)
-
-  val postProcessor = new TransformerParam(this, "postProcessor",
-    "Transformation to apply to the trained weights", {x: Transformer =>
-      x.hasParam("inputCol") & x.hasParam("outputCol")
-    })
-
-  def getPostProcessor: Transformer = $(postProcessor)
-
-  def setPostProcessor(v: Transformer): this.type = set(postProcessor, v)
-
-
   val nSamples = new IntParam(this, "nSamples", "The number of samples to generate if using a default sampler")
 
   def getNSamples: Int = $(nSamples)
 
   def setNSamples(v: Int): this.type = set(nSamples, v)
 
-  val decToInclude = new DoubleParam(this, "decToInclude", "TODO: doc string")
+  val samplingFraction = new DoubleParam(this, "samplingFraction", "TODO: doc string")
 
-  def getDecToInclude: Double = $(decToInclude)
+  def getSamplingFraction: Double = $(samplingFraction)
 
-  def setDecToInclude(d: Double): this.type = set(decToInclude, d)
+  def setSamplingFraction(d: Double): this.type = set(samplingFraction, d)
 
   val cellSize = new DoubleParam(this, "cellSize", "TODO: doc string")
 
@@ -161,72 +129,71 @@ class ImageLIME(val uid: String) extends Transformer
 
   def setModifier(d: Double): this.type = set(modifier, d)
 
-  setDefault(nSamples -> 100, cellSize -> 16, modifier -> 130, decToInclude -> 0.3)
+  setDefault(nSamples -> 10, cellSize -> 16, modifier -> 130, samplingFraction -> 0.3)
 
   override def transform(dataset: Dataset[_]): DataFrame = {
     import dataset.sparkSession.implicits._
-    import org.apache.spark.sql.functions.lit
-    import org.apache.spark.sql.functions.typedLit
 
-    if (get(sampler).isEmpty) {
-      setSampler(ImageLIME.defaultFiniteSampler(dataset.schema(getInputCol).dataType, getNSamples))
-    }
     val df = dataset.toDF
     val model = getModel
 
-    val localPredictionCol = DatasetExtensions
-      .findUnusedColumnName("localPrediction", df)
+    val superpixelCol = DatasetExtensions
+      .findUnusedColumnName("superpixels", df)
 
     val localFeaturesCol = DatasetExtensions
       .findUnusedColumnName("localFeatures", df)
 
     val localModel = new LinearRegression()
-          .setLabelCol(getLabelCol)
-          .setFeaturesCol(localFeaturesCol)
-          .setPredictionCol(localPredictionCol)
+      .setLabelCol(getLabelCol)
+      .setFeaturesCol(localFeaturesCol)
 
     // Data frame with new column containing superpixels (Array[Cluster]) for each row (image)
-    val superTransformer = new SuperpixelTransformer().setCellSize(getCellSize).setModifier(getModifier).
-      setInputCol(getInputCol).setOutputCol("Superpixels")
+    val spt = new SuperpixelTransformer()
+      .setCellSize(getCellSize)
+      .setModifier(getModifier)
+      .setInputCol(getInputCol)
+      .setOutputCol(superpixelCol)
 
-    val superDF = superTransformer.transform(df)
+    val spDF = spt.transform(df)
 
     // Indices of the columns containing each image and image's superpixels
-    val imageIndex = superDF.schema.fieldIndex(superTransformer.getInputCol)
-    val superpixelIndex = superDF.schema.fieldIndex(superTransformer.getOutputCol)
+    val superpixelIndex = spDF.schema.fieldIndex(spt.getOutputCol)
+    val spDFSchema = spDF.schema
+
+    val indiciesToKeep = spDF.columns.indices.filter(_ != superpixelIndex)
 
     // Collects to head node and creates a data frame from each row (image)
-    val sampledIterator = superDF.toLocalIterator().map { row =>
-
-      // Gets the image from the row
-      val image = row.getStruct(imageIndex)
-      //val imageBytes = ImageSchema.getBytes(image)
+    val sampledIterator = spDF.toLocalIterator().map { row =>
 
       // Gets the superpixels from the row
-      val superpixels = row.getAs[Seq[Seq[Row]]](superpixelIndex)
-
+      val superpixels = SuperpixelData.fromRow(row.getAs[Row](superpixelIndex))
 
       // Generate samples for the image
-      val sampler = Superpixel.clusterStateSampler(getDecToInclude, superpixels.length)
-
-      val samples: List[Array[Boolean]] = sampler.take(getNSamples).toList
+      val samples = Superpixel
+        .clusterStateSampler(getSamplingFraction, superpixels.clusters.length)
+        .take(getNSamples).toList
 
       // Creates a new data frame for each image, containing samples of cluster states
-      val imageDF = samples.toDF("States")
-        .withColumn("Image", lit(image))
-        .withColumn("Superpixels", lit(superpixels))
-
-      val censoredDF = imageDF.withColumn("CensoredImage",
-        Superpixel.getCensorUDF(col("Image"), col("Superpixels"), col("States")))
+      val censoredDF = samples.toDF(localFeaturesCol)
+        .map(stateRow => Row.merge(row, stateRow))(
+          RowEncoder(spDFSchema.add(localFeaturesCol, ArrayType(BooleanType))))
+        .withColumn(getInputCol, Superpixel.censorUDF(
+          col(getInputCol), col(spt.getOutputCol), col(localFeaturesCol)))
+        .withColumn(localFeaturesCol,
+          udf(
+            { barr: mutable.WrappedArray[Boolean] => new DenseVector(barr.map(b => if (b) 1.0 else 0.0).toArray) },
+            VectorType)(col(localFeaturesCol)))
 
       // Maps the data frame through the deep model
       val mappedLocalDF = model.transform(censoredDF)
+      println(mappedLocalDF.count())
 
       // Fits the data frame to the local model (regression), outputting the weights of importance
       val coefficients = localModel.fit(mappedLocalDF) match {
         case lr: LinearRegressionModel => lr.coefficients
       }
-      Row.merge(row, Row(coefficients))
+
+      Row(indiciesToKeep.map(row.get) ++ Seq(coefficients):_*)
     }
 
     val outputDF = df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
