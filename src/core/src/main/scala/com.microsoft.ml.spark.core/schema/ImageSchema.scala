@@ -5,8 +5,9 @@ package com.microsoft.ml.spark.core.schema
 
 import java.awt.image.BufferedImage
 import java.io.ByteArrayInputStream
-import javax.imageio.ImageIO
+import java.nio.{ByteBuffer, ByteOrder}
 
+import javax.imageio.ImageIO
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row}
 
@@ -32,7 +33,22 @@ object ImageSchema {
   def getBytes (row: Row): Array[Byte] = row.getAs[Array[Byte]](4)
 
   def toBufferedImage(row: Row): BufferedImage = {
-    ImageIO.read(new ByteArrayInputStream(getBytes(row)))
+    val bytes = getBytes(row)
+    val img = new BufferedImage(getWidth(row), getHeight(row), BufferedImage.TYPE_INT_RGB)
+    for (r <- 0 until getHeight(row)) {
+      for (c <- 0 until getWidth(row)) {
+        val index = r * getWidth(row) + c
+        val red = bytes(index) & 0xFF
+        val green = bytes(index + 1) & 0xFF
+        val blue = bytes(index + 2) & 0xFF
+        val rgb = (red << 16) | (green << 8) | blue
+        img.setRGB(c, r, rgb)
+      }
+    }
+    img
+    //val inputStream = new ByteArrayInputStream(getBytes(row))
+    //val img = ImageIO.read(inputStream)
+    //img
   }
 
   /** Check if the dataframe column contains images (i.e. has imageSchema)

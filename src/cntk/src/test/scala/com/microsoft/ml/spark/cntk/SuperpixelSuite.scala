@@ -4,6 +4,7 @@ import java.awt.Color
 import java.awt.image.BufferedImage
 
 import com.microsoft.ml.spark.core.test.datagen.{DatasetMissingValuesGenerationOptions, GenerateDataset}
+import org.apache.spark.sql.functions.lit
 
 import scala.util.Random
 
@@ -31,6 +32,12 @@ class SuperpixelSuite extends CNTKTestUtils {
     Random.nextDouble() > 0.5
   }
   lazy val censoredImg = Superpixel.censorImage(img, allClusters.get, states)
+
+  test("ToList should work on an iterator") {
+    val sampler = Superpixel.clusterStateSampler(0.3, 1000)
+    val samples: List[Array[Boolean]] = sampler.take(10).toList
+    assert(samples.size === 10)
+  }
 
   test("Censored clusters' pixels should be black in the censored image") {
     for (i <- states.indices if !states(i)) {

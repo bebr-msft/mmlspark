@@ -70,7 +70,10 @@ class ImageLIMESuite extends FuzzingMethods with ImageFeaturizerUtils {
       .setOutputCol("weights")
       .setInputCol(inputCol)
 
-    val count = lime.transform(groceryImages).count
+    lazy val testImagesPath = s"${groceriesPath}testImages/"
+    val testImages: DataFrame = session.readImages(testImagesPath, true).withColumnRenamed("image", inputCol)
+
+    val count = lime.transform(testImages).count
     println(count)
   }
 

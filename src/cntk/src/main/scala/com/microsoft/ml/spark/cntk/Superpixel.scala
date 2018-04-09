@@ -95,12 +95,12 @@ object Superpixel {
     output
   }
 
-  def clusterStateSampler(decInclude: Double, size: Int): Iterator[Array[Boolean]] =
+  def clusterStateSampler(decInclude: Double, numPixels: Int): Iterator[Array[Boolean]] =
     new Iterator[Array[Boolean]] {
       override def hasNext: Boolean = true
 
       override def next(): Array[Boolean] = {
-        Array.fill(size) {
+        Array.fill(numPixels) {
           Random.nextDouble() > decInclude
         }
       }

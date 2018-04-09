@@ -3,6 +3,8 @@
 
 package com.microsoft.ml.spark.cntk
 
+import java.awt.image.BufferedImage
+
 import com.microsoft.ml.spark.core.contracts._
 import com.microsoft.ml.spark.core.schema.DatasetExtensions.findUnusedColumnName
 import com.microsoft.ml.spark.core.schema.{DatasetExtensions, ImageSchema}
@@ -23,6 +25,8 @@ import org.apache.spark.sql.{DataFrame, Dataset, Row}
 
 import scala.math.round
 import scala.collection.JavaConversions._
+import scala.collection.mutable
+import scala.collection.mutable.ListBuffer
 import scala.reflect.ClassTag
 
 object ImageLIME extends ComplexParamsReadable[ImageLIME] {
@@ -162,6 +166,7 @@ class ImageLIME(val uid: String) extends Transformer
   override def transform(dataset: Dataset[_]): DataFrame = {
     import dataset.sparkSession.implicits._
     import org.apache.spark.sql.functions.lit
+    import org.apache.spark.sql.functions.typedLit
 
     if (get(sampler).isEmpty) {
       setSampler(ImageLIME.defaultFiniteSampler(dataset.schema(getInputCol).dataType, getNSamples))
@@ -195,9 +200,11 @@ class ImageLIME(val uid: String) extends Transformer
 
       // Gets the image from the row
       val image = row.getStruct(imageIndex)
+      //val imageBytes = ImageSchema.getBytes(image)
 
       // Gets the superpixels from the row
-      val superpixels = row.getAs[Array[Array[Row]]](superpixelIndex)
+      val superpixels = row.getAs[Seq[Seq[Row]]](superpixelIndex)
+
 
       // Generate samples for the image
       val sampler = Superpixel.clusterStateSampler(getDecToInclude, superpixels.length)
