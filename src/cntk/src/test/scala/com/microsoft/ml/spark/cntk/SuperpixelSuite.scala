@@ -13,7 +13,7 @@ import scala.util.Random
 
 class SuperpixelSuite extends CNTKTestUtils {
 
-  lazy val sp = new Superpixel()
+  lazy val sp = new Superpixel(img, 16, 130)
   lazy val width = 300
   lazy val height = 300
   lazy val rgbArray = new Array[Int](width * height)
@@ -30,7 +30,7 @@ class SuperpixelSuite extends CNTKTestUtils {
   }
   img.setRGB(0, 0, width, height, rgbArray, 0, width)
 
-  lazy val allClusters: Array[Cluster] = sp.cluster(img, 16, 130).get
+  lazy val allClusters: Array[Cluster] = sp.clusters
   lazy val states: Array[Boolean] = Array.fill(allClusters.length) {
     Random.nextDouble() > 0.5
   }

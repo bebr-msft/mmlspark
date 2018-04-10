@@ -16,7 +16,7 @@ import org.apache.spark.sql.functions.udf
 import org.apache.spark.sql.types.DataType
 
 import scala.collection.mutable
-import scala.collection.mutable.ArrayBuffer
+import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.util.Random
 
 case class PixelData(x: Int, y: Int)
@@ -51,7 +51,7 @@ object SuperpixelData {
   }
 
   def fromSuperpixel(sp: Superpixel): SuperpixelData = {
-    SuperpixelData(sp.clusters.get.map(ClusterData.fromCluster))
+    SuperpixelData(sp.clusters.map(ClusterData.fromCluster))
   }
 
   def fromArrCluster(arrCluster: Array[Cluster]): SuperpixelData = {
@@ -67,7 +67,7 @@ object Superpixel {
 
   def getSuperpixelUDF(cellSize: Double, modifier: Double): UserDefinedFunction = udf(
     { row: Row => SuperpixelData.fromArrCluster(
-      new Superpixel().cluster(ImageSchema.toBufferedImage(row), cellSize, modifier).get
+      new Superpixel(ImageSchema.toBufferedImage(row), cellSize, modifier).clusters
     )},
     SuperpixelData.schema)
 
@@ -87,26 +87,12 @@ object Superpixel {
   }
 
   def saveImage(filename: String, image: BufferedImage): Unit = {
-    val file = new File(filename)
-    try {
-      ImageIO.write(image, "png", file)
-      ()
-    }
-
-    catch {
-      case e: Exception =>
-        System.out.println(e.toString + " Image '" + filename + "' saving failed.")
-    }
+    ImageIO.write(image, "png", new File(filename))
+    ()
   }
 
   def loadImage(filename: String): Option[BufferedImage] = {
-    try
-      Some(ImageIO.read(new File(filename)))
-    catch {
-      case e: Exception =>
-        System.out.println(e.toString + " Image '" + filename + "' not found.")
-        None
-    }
+    Some(ImageIO.read(new File(filename)))
   }
 
   def copyImage(source: BufferedImage): BufferedImage = {
@@ -148,108 +134,80 @@ object Superpixel {
     }
 }
 
-class Superpixel() {
+class Superpixel(image: BufferedImage, cellSize: Double, modifier: Double) {
   // arrays to store values during process
-  var distances: Option[Array[Double]] = None: Option[Array[Double]]
-  var labels: Option[Array[Int]] = None: Option[Array[Int]]
-  var reds: Option[Array[Int]] = None: Option[Array[Int]]
-  var greens: Option[Array[Int]] = None: Option[Array[Int]]
-  var blues: Option[Array[Int]] = None: Option[Array[Int]]
-  var clusters: Option[Array[Cluster]] = None: Option[Array[Cluster]]
+  private val width = image.getWidth
+  private val height = image.getHeight
+  private val distances: Array[Double] = new Array[Double](width * height)
+  private val labels: Array[Int] = new Array[Int](width * height)
+  private val reds: Array[Int] = new Array[Int](width * height)
+  private val greens: Array[Int] = new Array[Int](width * height)
+  private val blues: Array[Int] = new Array[Int](width * height)
+
+  private val start: Long = System.currentTimeMillis
+  // get the image pixels
+  private val pixels: Array[Int] = image.getRGB(0, 0, width, height, null, 0, width)
+  // create and fill lookup tables
+  util.Arrays.fill(distances, Integer.MAX_VALUE)
+  util.Arrays.fill(labels, -1)
+  // split rgb-values to own arrays
+  for(y <- 0 until height; x <- 0 until width) {
+    val pos = x + y * width
+    val color = pixels(pos)
+    reds.update(pos, color >> 16 & 0x000000FF)
+    greens.update(pos, color >> 8 & 0x000000FF)
+    blues.update(pos, color >> 0 & 0x000000FF)
+  }
+
+  val clusters: Array[Cluster] = createClusters(image, cellSize, modifier)
   // in case of unstable clusters, max number of loops
   val maxClusteringLoops = 50
 
-  def cluster(image: BufferedImage, cellSize: Double, modifier: Double): Option[Array[Cluster]] = {
-    val width = image.getWidth
-    val height = image.getHeight
-    val result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-    val start = System.currentTimeMillis
-    // get the image pixels
-    val pixels = image.getRGB(0, 0, width, height, null, 0, width)
-    // create and fill lookup tables
-    distances = Some(new Array[Double](width * height))
-    util.Arrays.fill(distances.get, Integer.MAX_VALUE)
-    labels = Some(new Array[Int](width * height))
-    util.Arrays.fill(labels.get, -1)
-    // split rgb-values to own arrays
-    reds = Some(new Array[Int](width * height))
-    greens = Some(new Array[Int](width * height))
-    blues = Some(new Array[Int](width * height))
-    (0 until height).foreach {y =>
-      (0 until width).foreach {x =>
-        val pos = x + y * width
-        val color = pixels(pos)
-        reds.get(pos) = color >> 16 & 0x000000FF
-        greens.get(pos) = color >> 8 & 0x000000FF
-        blues.get(pos) = color >> 0 & 0x000000FF
-      }
-    }
-    // create clusters
-    createClusters(image, cellSize, modifier)
-    // loop until all clusters are stable!
-    var loops = 0
-    var pixelChangedCluster = true
-    while (pixelChangedCluster && loops < maxClusteringLoops) {
-      pixelChangedCluster = false
-      loops += 1
-      // for each cluster center C
-      clusters.get.indices.foreach { i =>
-        val c = clusters.get(i)
-        // for each pixel i in 2S region around
-        // cluster center
-        val xs = Math.max((c.avg_x - cellSize).toInt, 0)
-        val ys = Math.max((c.avg_y - cellSize).toInt, 0)
-        val xe = Math.min((c.avg_x + cellSize).toInt, width)
-        val ye = Math.min((c.avg_y + cellSize).toInt, height)
-        (ys until ye).foreach {y =>
-          (xs until xe).foreach {x =>
-            val pos = x + width * y
-            val D = c.distance(x, y,
-              reds.get(pos), greens.get(pos), blues.get(pos),
-              cellSize, modifier, width, height)
-            if ((D < distances.get(pos)) && (labels.get(pos) != c.id)) {
-              distances.get(pos) = D
-              labels.get(pos) = c.id
-              pixelChangedCluster = true
-            }
-          }
+  // loop until all clusters are stable!
+  var loops = 0
+  var pixelChangedCluster = true
+  while (pixelChangedCluster && loops < maxClusteringLoops) {
+    pixelChangedCluster = false
+    loops += 1
+    // for each cluster center C
+    for (c <- clusters) {
+      // for each pixel i in 2S region around
+      // cluster center
+      val xs = Math.max((c.avg_x - cellSize).toInt, 0)
+      val ys = Math.max((c.avg_y - cellSize).toInt, 0)
+      val xe = Math.min((c.avg_x + cellSize).toInt, width)
+      val ye = Math.min((c.avg_y + cellSize).toInt, height)
+      for (y <- ys until ye; x <- xs until xe){
+        val pos = x + width * y
+        val D = c.distance(x, y,
+          reds(pos), greens(pos), blues(pos),
+          cellSize, modifier, width, height)
+        if ((D < distances(pos)) && (labels(pos) != c.id)) {
+          distances.update(pos, D)
+          labels.update(pos, c.id)
+          pixelChangedCluster = true
         }
       }
-      // reset clusters
-      clusters.get.indices.foreach {index =>
-        clusters.get(index).reset()
-      }
-      // add every pixel to cluster based on label
-      (0 until height).foreach {y =>
-        (0 until width).foreach {x =>
-          val pos = x + y * width
-          clusters.get(labels.get(pos)).addPixel(x, y, reds.get(pos), greens.get(pos), blues.get(pos))
-        }
-      }
-      // calculate centers
-      clusters.get.foreach {_.calculateCenter()}
     }
-    // Create output image with pixel edges
-    (1 until height - 1).foreach {y =>
-      (1 until width - 1).foreach {x =>
-        val id1 = labels.get(x + y * width)
-        val id2 = labels.get((x + 1) + y * width)
-        val id3 = labels.get(x + (y + 1) * width)
-        if (id1 != id2 || id1 != id3) {
-          result.setRGB(x, y, 0x000000)
-        }
-        else result.setRGB(x, y, image.getRGB(x, y))
-      }
-    }
+    // reset clusters
+    clusters.foreach(_.reset())
 
-    val end = System.currentTimeMillis
-    println("Clustered to " + clusters.get.length +
-      " superpixels in " + loops + " loops in " + (end - start) + " ms.")
-    clusters
+    // add every pixel to cluster based on label
+    for (y <- 0 until height; x<- 0 until width) {
+      val pos = x + y * width
+      clusters(labels(pos)).addPixel(x, y, reds(pos), greens(pos), blues(pos))
+    }
+    // calculate centers
+    clusters.foreach(_.calculateCenter())
   }
 
-  def createClusters(image: BufferedImage, cellSize: Double, modifier: Double): Unit = {
-    val temp = new util.Vector[Cluster]
+  private val end = System.currentTimeMillis
+  println("Clustered to " + clusters.length +
+    " superpixels in " + loops + " loops in " + (end - start) + " ms.")
+
+
+  private def createClusters(image: BufferedImage, cellSize: Double, modifier: Double): Array[Cluster] = {
+    val temp = new ListBuffer[Cluster]
     val width = image.getWidth
     val height = image.getHeight
     var even = false
@@ -261,45 +219,39 @@ class Superpixel() {
       if (even) {
         xstart = cellSize / 2.0
         even = false
-      }
-      else {
+      } else {
         xstart = cellSize
         even = true
       }
       var x = xstart
       while (x < width) {
         val pos = (x + y * width).toInt
-        val c = new Cluster(id, reds.get(pos), greens.get(pos), blues.get(pos), x.toInt, y.toInt, cellSize, modifier)
-        temp.add(c)
+        val c = new Cluster(id, reds(pos), greens(pos), blues(pos), x.toInt, y.toInt, cellSize, modifier)
+        temp.append(c)
         id += 1
         x += cellSize
       }
       y += cellSize
     }
-    clusters = Some(new Array[Cluster](temp.size))
-    var i = 0
-    while (i < temp.size) {
-      clusters.get(i) = temp.elementAt(i)
-      i += 1
-    }
+    temp.toArray
   }
 }
 
 class Cluster(var id: Int, val in_red: Int, val in_green: Int, val in_blue: Int,
               val x: Int, val y: Int, val cellSize: Double, val modifier: Double) {
-  var inv: Double = 1.0 / ((cellSize / modifier) * (cellSize / modifier)) // inv variable for optimization
-  var pixelCount = .0 // pixels in this cluster
-  var avg_red = .0 // average red value
-  var avg_green = .0 // average green value
-  var avg_blue = .0 // average blue value
-  var sum_red = .0 // sum red values
-  var sum_green = .0 // sum green values
-  var sum_blue = .0 // sum blue values
-  var sum_x = .0 // sum x
-  var sum_y = .0 // sum y
+  private val inv: Double = 1.0 / ((cellSize / modifier) * (cellSize / modifier)) // inv variable for optimization
+  private var pixelCount = .0 // pixels in this cluster
+  private var avg_red = .0 // average red value
+  private var avg_green = .0 // average green value
+  private var avg_blue = .0 // average blue value
+  private var sum_red = .0 // sum red values
+  private var sum_green = .0 // sum green values
+  private var sum_blue = .0 // sum blue values
+  private var sum_x = .0 // sum x
+  private var sum_y = .0 // sum y
   var avg_x = .0 // average x
   var avg_y = .0 // average y
-  var pixels = new ArrayBuffer[(Int, Int)]
+  val pixels = new ArrayBuffer[(Int, Int)]
 
   addPixel(x, y, in_red, in_green, in_blue)
   // calculate center with initial one pixel
@@ -327,8 +279,7 @@ class Cluster(var id: Int, val in_red: Int, val in_green: Int, val in_blue: Int,
     sum_green += in_green
     sum_blue += in_blue
     pixelCount += 1
-    pixels += ((x, y))
-    ()
+    pixels.append((x, y))
   }
 
   def calculateCenter(): Unit = {
