@@ -4,9 +4,9 @@ import java.awt.FlowLayout
 import java.awt.image.BufferedImage
 import java.io.File
 import java.util
+
 import javax.imageio.ImageIO
 import javax.swing.{ImageIcon, JFrame, JLabel}
-
 import com.microsoft.ml.spark.IO.image.ImageReader
 import com.microsoft.ml.spark.core.schema.{ImageData, ImageSchema}
 import org.apache.spark.sql.Row
@@ -78,12 +78,14 @@ object Superpixel {
 
   val censorUDF: UserDefinedFunction = udf(censorImageHelper _, ImageSchema.columnSchema)
 
-  def displayImage(img: BufferedImage): Unit = {
+  def displayImage(img: BufferedImage): JFrame = {
     val frame: JFrame = new JFrame()
     frame.getContentPane.setLayout(new FlowLayout())
     frame.getContentPane.add(new JLabel(new ImageIcon(img)))
     frame.pack()
     frame.setVisible(true)
+
+    frame
   }
 
   def saveImage(filename: String, image: BufferedImage): Unit = {
@@ -104,7 +106,9 @@ object Superpixel {
   }
 
   def censorImage(imgRow: Row, superpixels: SuperpixelData, clusterStates: Array[Boolean]): BufferedImage = {
-    val img = ImageSchema.toBufferedImage(imgRow)
+    val img = ImageSchema.toBufferedImageTEST(ImageSchema.getBytes(imgRow),
+      ImageSchema.getWidth(imgRow),
+      ImageSchema.getHeight(imgRow))
     val output = copyImage(img)
 
     superpixels.clusters.zipWithIndex.foreach { case (c, i) =>
@@ -193,7 +197,7 @@ class Superpixel(image: BufferedImage, cellSize: Double, modifier: Double) {
     clusters.foreach(_.reset())
 
     // add every pixel to cluster based on label
-    for (y <- 0 until height; x<- 0 until width) {
+    for (y <- 0 until height; x <- 0 until width) {
       val pos = x + y * width
       clusters(labels(pos)).addPixel(x, y, reds(pos), greens(pos), blues(pos))
     }
@@ -204,6 +208,24 @@ class Superpixel(image: BufferedImage, cellSize: Double, modifier: Double) {
   private val end = System.currentTimeMillis
   println("Clustered to " + clusters.length +
     " superpixels in " + loops + " loops in " + (end - start) + " ms.")
+
+  def getClusteredImage: BufferedImage = {
+    val result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
+    for (y <- 1 until height - 1) {
+      for (x <- 1 until width - 1) {
+        val id1 = labels(x + y * width)
+        val id2 = labels(x + 1 + y * width)
+        val id3 = labels(x + (y + 1) * width)
+        if (id1 != id2 || id1 != id3) {
+          result.setRGB(x, y, 0x000000)
+        }
+        else {
+          result.setRGB(x, y, image.getRGB(x, y))
+        }
+      }
+    }
+    result
+  }
 
 
   private def createClusters(image: BufferedImage, cellSize: Double, modifier: Double): Array[Cluster] = {

@@ -160,7 +160,7 @@ class ImageLIME(val uid: String) extends Transformer
     val superpixelIndex = spDF.schema.fieldIndex(spt.getOutputCol)
     val spDFSchema = spDF.schema
 
-    val indiciesToKeep = spDF.columns.indices.filter(_ != superpixelIndex)
+    val indiciesToKeep = spDF.columns.indices//.filter(_ != superpixelIndex)
 
     // Collects to head node and creates a data frame from each row (image)
     val sampledIterator = spDF.toLocalIterator().map { row =>
@@ -196,7 +196,7 @@ class ImageLIME(val uid: String) extends Transformer
       Row(indiciesToKeep.map(row.get) ++ Seq(coefficients):_*)
     }
 
-    val outputDF = df.sparkSession.createDataFrame(sampledIterator.toSeq, df.schema
+    val outputDF = df.sparkSession.createDataFrame(sampledIterator.toSeq, spDF.schema
       .add(getOutputCol, VectorType))
 
     outputDF

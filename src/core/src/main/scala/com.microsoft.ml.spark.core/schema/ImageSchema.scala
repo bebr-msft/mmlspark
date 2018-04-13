@@ -3,11 +3,13 @@
 
 package com.microsoft.ml.spark.core.schema
 
-import java.awt.image.BufferedImage
-import java.io.ByteArrayInputStream
+import java.awt.Point
+import java.awt.image.{BufferedImage, DataBufferByte, Raster}
+import java.io.{ByteArrayInputStream, ByteArrayOutputStream, FileInputStream}
 import java.nio.{ByteBuffer, ByteOrder}
 
 import javax.imageio.ImageIO
+import javax.imageio.spi.ImageInputStreamSpi
 import org.apache.spark.sql.types._
 import org.apache.spark.sql.{DataFrame, Row}
 
@@ -65,6 +67,27 @@ object ImageSchema {
         img.setRGB(c, r, rgb)
       }
     }
+    img
+  }
+
+  def toBufferedImage(bytes: Array[Byte], w: Int, h: Int): BufferedImage = {
+    val img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
+    for (r <- 0 until h) {
+      for (c <- 0 until w) {
+        val index = r * w + c
+        val red = bytes(index) & 0xFF
+        val green = bytes(index + 1) & 0xFF
+        val blue = bytes(index + 2) & 0xFF
+        val rgb = (red << 16) | (green << 8) | blue
+        img.setRGB(c, r, rgb)
+      }
+    }
+    img
+  }
+
+  def toBufferedImageTEST(bytes: Array[Byte], w: Int, h: Int): BufferedImage = {
+    val img = new BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR)
+    img.setData(Raster.createRaster(img.getSampleModel(), new DataBufferByte(bytes, bytes.length), new Point()))
     img
   }
 
