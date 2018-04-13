@@ -53,44 +53,14 @@ object ImageSchema {
   def getBytes(row: Row): Array[Byte] = row.getAs[Array[Byte]](4)
 
   def toBufferedImage(row: Row): BufferedImage = {
-    val bytes = getBytes(row)
-    val w = getWidth(row)
-    val h = getHeight(row)
-    val img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
-    for (r <- 0 until h) {
-      for (c <- 0 until w) {
-        val index = r * w + c
-        val red = bytes(index) & 0xFF
-        val green = bytes(index + 1) & 0xFF
-        val blue = bytes(index + 2) & 0xFF
-        val rgb = (red << 16) | (green << 8) | blue
-        img.setRGB(c, r, rgb)
-      }
-    }
-    img
+    toBufferedImage(getBytes(row),getWidth(row), getHeight(row) )
   }
 
   def toBufferedImage(bytes: Array[Byte], w: Int, h: Int): BufferedImage = {
-    val img = new BufferedImage(w, h, BufferedImage.TYPE_INT_RGB)
-    for (r <- 0 until h) {
-      for (c <- 0 until w) {
-        val index = r * w + c
-        val red = bytes(index) & 0xFF
-        val green = bytes(index + 1) & 0xFF
-        val blue = bytes(index + 2) & 0xFF
-        val rgb = (red << 16) | (green << 8) | blue
-        img.setRGB(c, r, rgb)
-      }
-    }
-    img
-  }
-
-  def toBufferedImageTEST(bytes: Array[Byte], w: Int, h: Int): BufferedImage = {
     val img = new BufferedImage(w, h, BufferedImage.TYPE_3BYTE_BGR)
     img.setData(Raster.createRaster(img.getSampleModel(), new DataBufferByte(bytes, bytes.length), new Point()))
     img
   }
-
 
   /** Check if the dataframe column contains images (i.e. has imageSchema)
     *

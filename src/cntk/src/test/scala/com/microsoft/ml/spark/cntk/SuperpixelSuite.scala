@@ -1,3 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License. See LICENSE in project root for information.
+
 package com.microsoft.ml.spark.cntk
 
 import java.awt.Color
@@ -14,13 +17,14 @@ import scala.util.Random
 
 class SuperpixelSuite extends CNTKTestUtils {
 
-  lazy val sp = new Superpixel(img, 16, 130)
+  lazy val sp1 = new Superpixel(img, 16, 130)
   lazy val sp2 = new Superpixel(img2, 100, 130)
   lazy val width = 300
   lazy val height = 300
   lazy val rgbArray = new Array[Int](width * height)
   lazy val img: BufferedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB)
-  lazy val img2: BufferedImage = ImageIO.read(new File("/home/bebr/lib/datasets/Images/Grocery/testImages/WIN_20160803_12_37_07_Pro.jpg"))
+  lazy val img2: BufferedImage = ImageIO.read(
+    new File("/home/bebr/lib/datasets/Images/Grocery/testImages/WIN_20160803_12_37_07_Pro.jpg"))
 
   // Adds colors to the img
   for (y <- 0 until height) {
@@ -33,7 +37,7 @@ class SuperpixelSuite extends CNTKTestUtils {
   }
   img.setRGB(0, 0, width, height, rgbArray, 0, width)
 
-  lazy val allClusters: Array[Cluster] = sp.clusters
+  lazy val allClusters: Array[Cluster] = sp1.clusters
   lazy val allClusters2: Array[Cluster] = sp2.clusters
   lazy val states: Array[Boolean] = Array.fill(allClusters.length) {
     Random.nextDouble() > 0.5
@@ -42,9 +46,8 @@ class SuperpixelSuite extends CNTKTestUtils {
     Random.nextDouble() > 0.5
   }
 
-  val superpixels: SuperpixelData = SuperpixelData.fromArrCluster(allClusters)
-  val superpixels2: SuperpixelData = SuperpixelData.fromArrCluster(allClusters2)
-
+  val superpixels: SuperpixelData = SuperpixelData.fromSuperpixel(sp1)
+  val superpixels2: SuperpixelData = SuperpixelData.fromSuperpixel(sp2)
 
   ImageReader.OpenCVLoader
   lazy val censoredImg: BufferedImage = Superpixel.censorImage(
@@ -59,7 +62,7 @@ class SuperpixelSuite extends CNTKTestUtils {
   }
 
   test("GetClusteredImage should show the image with its clusters outlined, not censored") {
-    Superpixel.displayImage(sp.getClusteredImage)
+    Superpixel.displayImage(sp1.getClusteredImage)
     Superpixel.displayImage(censoredImg)
     Superpixel.displayImage(sp2.getClusteredImage)
     Superpixel.displayImage(censoredImg2)
@@ -96,7 +99,6 @@ class SuperpixelSuite extends CNTKTestUtils {
   }
 
   test("superpixel transformer works"){
-
 
   }
 

@@ -1,3 +1,6 @@
+// Copyright (C) Microsoft Corporation. All rights reserved.
+// Licensed under the MIT License. See LICENSE in project root for information.
+
 package com.microsoft.ml.spark.cntk
 
 import java.awt.FlowLayout
@@ -19,44 +22,20 @@ import scala.collection.mutable
 import scala.collection.mutable.{ArrayBuffer, ListBuffer}
 import scala.util.Random
 
-case class PixelData(x: Int, y: Int)
-
-object PixelData {
-  def fromRow(r: Row) = PixelData(r.getInt(0), r.getInt(1))
-
-  val schema: DataType = ScalaReflection.schemaFor[PixelData].dataType
-}
-
-case class ClusterData(pixels: Array[PixelData])
-
-object ClusterData {
-  val schema: DataType =  ScalaReflection.schemaFor[ClusterData].dataType
-
-  def fromCluster(c: Cluster) =
-    ClusterData(c.pixels.map(p => PixelData(p._1, p._2)).toArray)
-
-  def fromRow(r: Row): ClusterData = {
-    ClusterData(r.getAs[mutable.WrappedArray[Row]](0).map(PixelData.fromRow).toArray)
-  }
-}
-
-case class SuperpixelData(clusters: Array[ClusterData])
+case class SuperpixelData(clusters: Array[Array[(Int, Int)]])
 
 object SuperpixelData {
   val schema: DataType =  ScalaReflection.schemaFor[SuperpixelData].dataType
 
   def fromRow(r: Row): SuperpixelData = {
-    val clusters = r.getAs[mutable.WrappedArray[Row]](0)
-    SuperpixelData(clusters.map(ClusterData.fromRow).toArray)
+    val clusters = r.getAs[mutable.WrappedArray[mutable.WrappedArray[Row]]](0)
+    SuperpixelData(clusters.map(cluster => cluster.map(r => (r.getInt(0), r.getInt(1))).toArray).toArray)
   }
 
   def fromSuperpixel(sp: Superpixel): SuperpixelData = {
-    SuperpixelData(sp.clusters.map(ClusterData.fromCluster))
+    SuperpixelData(sp.clusters.map(_.pixels.toArray))
   }
 
-  def fromArrCluster(arrCluster: Array[Cluster]): SuperpixelData = {
-    SuperpixelData(arrCluster.map(ClusterData.fromCluster))
-  }
 }
 
 /**
@@ -66,8 +45,8 @@ object SuperpixelData {
 object Superpixel {
 
   def getSuperpixelUDF(cellSize: Double, modifier: Double): UserDefinedFunction = udf(
-    { row: Row => SuperpixelData.fromArrCluster(
-      new Superpixel(ImageSchema.toBufferedImage(row), cellSize, modifier).clusters
+    { row: Row => SuperpixelData.fromSuperpixel(
+      new Superpixel(ImageSchema.toBufferedImage(row), cellSize, modifier)
     )},
     SuperpixelData.schema)
 
@@ -106,21 +85,20 @@ object Superpixel {
   }
 
   def censorImage(imgRow: Row, superpixels: SuperpixelData, clusterStates: Array[Boolean]): BufferedImage = {
-    val img = ImageSchema.toBufferedImageTEST(ImageSchema.getBytes(imgRow),
+    val img = ImageSchema.toBufferedImage(ImageSchema.getBytes(imgRow),
       ImageSchema.getWidth(imgRow),
       ImageSchema.getHeight(imgRow))
     val output = copyImage(img)
 
-    superpixels.clusters.zipWithIndex.foreach { case (c, i) =>
+    superpixels.clusters.zipWithIndex.foreach { case (cluster, i) =>
       if (!clusterStates(i)) {
-        c.pixels.foreach(pt => {
-          output.setRGB(pt.x, pt.y, 0x000000)
-        })
-      }
-      else {
-        c.pixels.foreach(pt => {
-          output.setRGB(pt.x, pt.y, img.getRGB(pt.x, pt.y))
-        })
+        cluster.foreach { case (x, y) =>
+          output.setRGB(x, y, 0x000000)
+        }
+      } else {
+        cluster.foreach { case (x, y) =>
+          output.setRGB(x, y, img.getRGB(x, y))
+        }
       }
     }
     output
@@ -226,7 +204,6 @@ class Superpixel(image: BufferedImage, cellSize: Double, modifier: Double) {
     }
     result
   }
-
 
   private def createClusters(image: BufferedImage, cellSize: Double, modifier: Double): Array[Cluster] = {
     val temp = new ListBuffer[Cluster]
