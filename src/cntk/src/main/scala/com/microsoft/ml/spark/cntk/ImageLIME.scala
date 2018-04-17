@@ -129,7 +129,7 @@ class ImageLIME(val uid: String) extends Transformer
 
   def setModifier(d: Double): this.type = set(modifier, d)
 
-  setDefault(nSamples -> 10, cellSize -> 16, modifier -> 130, samplingFraction -> 0.3)
+  setDefault(nSamples -> 900, cellSize -> 16, modifier -> 130, samplingFraction -> 0.3)
 
   override def transform(dataset: Dataset[_]): DataFrame = {
     import dataset.sparkSession.implicits._

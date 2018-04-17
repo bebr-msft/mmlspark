@@ -96,6 +96,15 @@ class ImageFeaturizerSuite extends ImageFeaturizerUtils with FileReaderUtils
     assert(resVec.size == 1000)
   }
 
+  test("Image featurizer should correctly classify an image", TestBase.Extended) {
+    val testImg: DataFrame = session
+      .readImages(s"$filesRoot/Images/Grocery/testImages/WIN_20160803_11_28_42_Pro.jpg", false)
+      .withColumnRenamed("image", inputCol)
+    val result = resNetModel().transform(testImg)
+    val resVec = result.select(outputCol).collect()(0).getAs[DenseVector](0)
+    assert(resVec.argmax == 760)
+  }
+
   test("test layers of network", TestBase.Extended) {
     (0 to 9).foreach({ i =>
       val model = new ImageFeaturizer()

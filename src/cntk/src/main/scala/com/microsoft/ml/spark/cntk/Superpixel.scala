@@ -106,6 +106,8 @@ object Superpixel {
 
   def clusterStateSampler(decInclude: Double, numPixels: Int): Iterator[Array[Boolean]] =
     new Iterator[Array[Boolean]] {
+      Random.setSeed(0)
+
       override def hasNext: Boolean = true
 
       override def next(): Array[Boolean] = {
